@@ -1,0 +1,156 @@
+{
+  "best_model": "XGBoost Classifier",
+  "feature_columns": {
+    "numeric": [
+      "rainfall_1h",
+      "rainfall_24h",
+      "rainfall_7d_cumulative",
+      "rainfall_intensity",
+      "slope",
+      "elevation",
+      "distance_road",
+      "distance_river",
+      "historical_landslides",
+      "snow_cover_pct",
+      "snowmelt_rate",
+      "bare_soil_pct",
+      "vegetation_index",
+      "latitude",
+      "longitude"
+    ],
+    "categorical": [
+      "soil_type",
+      "land_cover",
+      "geology",
+      "aspect"
+    ],
+    "boolean": [
+      "farm_change_flag"
+    ]
+  },
+  "transformed_feature_names": [
+    "rainfall_1h",
+    "rainfall_24h",
+    "rainfall_7d_cumulative",
+    "rainfall_intensity",
+    "slope",
+    "elevation",
+    "distance_road",
+    "distance_river",
+    "historical_landslides",
+    "snow_cover_pct",
+    "snowmelt_rate",
+    "bare_soil_pct",
+    "vegetation_index",
+    "latitude",
+    "longitude",
+    "soil_type_Alluvial Loam",
+    "soil_type_Clay Loam",
+    "soil_type_Glacial Till",
+    "soil_type_Humus Rich Loam",
+    "soil_type_Lateritic Clay",
+    "soil_type_Loam",
+    "soil_type_Rocky Loam",
+    "soil_type_Sandy Loam",
+    "soil_type_Silty Loam",
+    "land_cover_Barren Rocky",
+    "land_cover_Dense Forest",
+    "land_cover_Open Forest",
+    "land_cover_Settlement",
+    "land_cover_Shrubland",
+    "land_cover_Slope Agriculture",
+    "geology_Barail Sandstone",
+    "geology_Disang Shale",
+    "geology_Gneissic Complex",
+    "geology_Granitic Gneiss",
+    "geology_Phyllite & Schist",
+    "geology_Quartzite & Phyllite",
+    "geology_Sub-Himalayan Sandstone",
+    "geology_Sylhet Trap & Limestone",
+    "aspect_E",
+    "aspect_N",
+    "aspect_NE",
+    "aspect_NW",
+    "aspect_S",
+    "aspect_SE",
+    "aspect_SW",
+    "aspect_W",
+    "farm_change_flag"
+  ],
+  "model_comparison": {
+    "Logistic Regression": {
+      "accuracy": 0.792,
+      "precision": 0.7553,
+      "recall": 0.6462,
+      "f1_score": 0.6965,
+      "roc_auc": 0.8456,
+      "confusion_matrix": [
+        [
+          830,
+          116
+        ],
+        [
+          196,
+          358
+        ]
+      ]
+    },
+    "Random Forest": {
+      "accuracy": 0.7893,
+      "precision": 0.7449,
+      "recall": 0.6534,
+      "f1_score": 0.6962,
+      "roc_auc": 0.8353,
+      "confusion_matrix": [
+        [
+          822,
+          124
+        ],
+        [
+          192,
+          362
+        ]
+      ]
+    },
+    "XGBoost Classifier": {
+      "accuracy": 0.7747,
+      "precision": 0.7213,
+      "recall": 0.6354,
+      "f1_score": 0.6756,
+      "roc_auc": 0.8327,
+      "confusion_matrix": [
+        [
+          810,
+          136
+        ],
+        [
+          202,
+          352
+        ]
+      ]
+    }
+  },
+  "top_feature_importances": {
+    "rainfall_24h": 0.1215,
+    "geology_Quartzite & Phyllite": 0.0323,
+    "farm_change_flag": 0.0305,
+    "rainfall_7d_cumulative": 0.0286,
+    "geology_Phyllite & Schist": 0.027,
+    "slope": 0.0261,
+    "geology_Granitic Gneiss": 0.0261,
+    "historical_landslides": 0.0235,
+    "soil_type_Loam": 0.0229,
+    "geology_Sub-Himalayan Sandstone": 0.0223,
+    "soil_type_Glacial Till": 0.0214,
+    "snowmelt_rate": 0.0213,
+    "rainfall_1h": 0.0208,
+    "land_cover_Open Forest": 0.0205,
+    "aspect_S": 0.02
+  },
+  "flood_metrics": {
+    "accuracy": 0.8913,
+    "f1_score": 0.6554,
+    "roc_auc": 0.9255
+  },
+  "prototype_disclaimer": "LANDSAFE-NER is a B.Tech AI & Data Science academic prototype. It is NOT an official government disaster-warning system. Risk levels are based on prototype thresholds for demonstration purposes only. Do not use for real-world emergency decisions."
+}
