@@ -1,9 +1,10 @@
 const API_BASE = '/api';
 
-export async function fetchLocations(state = '', risk = '') {
+export async function fetchLocations(state = '', district = '', risk = '') {
   try {
     const params = new URLSearchParams();
     if (state) params.append('state', state);
+    if (district) params.append('district', district);
     if (risk) params.append('risk', risk);
     const url = `${API_BASE}/locations${params.toString() ? `?${params.toString()}` : ''}`;
     const res = await fetch(url);
@@ -11,6 +12,17 @@ export async function fetchLocations(state = '', risk = '') {
     return await res.json();
   } catch (err) {
     console.warn('Locations fetch error:', err);
+    return [];
+  }
+}
+
+export async function fetchHierarchy() {
+  try {
+    const res = await fetch(`${API_BASE}/hierarchy`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Hierarchy fetch error:', err);
     return [];
   }
 }

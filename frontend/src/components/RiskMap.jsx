@@ -1,15 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap, WMSTileLayer } from 'react-leaflet';
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { Layers, Eye, ShieldAlert, Sparkles, Droplet } from 'lucide-react';
 import SatelliteLayerToggle from './SatelliteLayerToggle';
 
-// Custom Map Controller to smoothly fly to selected location
+// Map controller to smoothly pan/zoom to selected location or state/district
 function MapRecenter({ center, zoom }) {
   const map = useMap();
   useEffect(() => {
     if (center && center[0] && center[1]) {
-      map.flyTo(center, zoom || 9, { duration: 1.2 });
+      map.flyTo(center, zoom || 6, { duration: 1.2 });
     }
   }, [center, zoom, map]);
   return null;
@@ -18,20 +17,27 @@ function MapRecenter({ center, zoom }) {
 export default function RiskMap({
   locations = [],
   selectedLocation,
-  onSelectLocation
+  onSelectLocation,
+  customZoom = null
 }) {
-  const [baseMap, setBaseMap] = useState('satellite'); // 'satellite' | 'terrain'
+  const [baseMap, setBaseMap] = useState('satellite');
   const [activeSatelliteLayer, setActiveSatelliteLayer] = useState('none');
   const [isroEnabled, setIsroEnabled] = useState(false);
 
-  // Default center: Northeast India geographic center (near Assam/Arunachal/Meghalaya)
-  const defaultCenter = [26.4, 92.8];
+  // All-India Geographic Center
+  const indiaCenter = [22.8, 82.0];
   const activeCenter = selectedLocation
     ? [selectedLocation.latitude, selectedLocation.longitude]
-    : defaultCenter;
+    : indiaCenter;
+
+  const currentZoom = selectedLocation ? 9 : (customZoom || 5);
 
   const getMarkerColor = (loc) => {
-    // If a satellite overlay is selected, color by that index
+    // If location is a plain / low risk tier without high hazard monitoring
+    if (loc.has_prediction === false) {
+      return '#94a3b8'; // Slate/Grey for plain terrain
+    }
+
     if (activeSatelliteLayer === 'snow') {
       const snow = loc.snow_cover_pct || 0;
       return snow > 40 ? '#06b6d4' : snow > 10 ? '#38bdf8' : '#94a3b8';
@@ -48,7 +54,7 @@ export default function RiskMap({
       return loc.flood_extent_flag ? '#2563eb' : '#94a3b8';
     }
 
-    // Default: Landslide risk category
+    // Default Landslide Risk Colors
     const prob = loc.risk_probability || 0.2;
     if (loc.risk_category === 'High' || prob >= 0.70) return '#ef4444';
     if (loc.risk_category === 'Moderate' || prob >= 0.30) return '#f59e0b';
@@ -61,15 +67,15 @@ export default function RiskMap({
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3 z-20">
         <div className="flex items-center space-x-2">
           <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-            Landslide Risk Map — Northeast India
+            National Multi-Hazard Risk Map — All India (State & District Hierarchy)
           </h2>
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-600 border border-emerald-200">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse mr-1" />
-            Live
+            Live Ingestion
           </span>
         </div>
 
-        {/* Basemap Toggle Buttons */}
+        {/* Basemap Switcher */}
         <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs">
           <button
             onClick={() => setBaseMap('satellite')}
@@ -94,15 +100,15 @@ export default function RiskMap({
         </div>
       </div>
 
-      {/* Map Container */}
-      <div className="relative flex-1 rounded-xl overflow-hidden min-h-[380px]">
+      {/* Leaflet Map Canvas */}
+      <div className="relative flex-1 rounded-xl overflow-hidden min-h-[400px]">
         <MapContainer
-          center={defaultCenter}
-          zoom={7}
+          center={indiaCenter}
+          zoom={5}
           scrollWheelZoom={true}
           className="w-full h-full"
         >
-          <MapRecenter center={activeCenter} zoom={selectedLocation ? 9 : 7} />
+          <MapRecenter center={activeCenter} zoom={currentZoom} />
 
           {/* Base Tile Layer */}
           {baseMap === 'satellite' ? (
@@ -128,11 +134,12 @@ export default function RiskMap({
             />
           )}
 
-          {/* 250 Location Risk Markers */}
+          {/* Location Risk Markers */}
           {locations.map((loc) => {
             const isSelected = selectedLocation && selectedLocation.id === loc.id;
             const color = getMarkerColor(loc);
-            const isHighRisk = (loc.risk_category === 'High' || (loc.risk_probability || 0) >= 0.7) && activeSatelliteLayer === 'none';
+            const isPlain = loc.has_prediction === false;
+            const isHighRisk = loc.risk_category === 'High' && activeSatelliteLayer === 'none';
 
             return (
               <CircleMarker
@@ -150,32 +157,38 @@ export default function RiskMap({
                 }}
               >
                 <Popup>
-                  <div className="p-2 min-w-[170px] text-xs">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-1 mb-1.5">
-                      <span className="font-bold text-slate-900">{loc.name}</span>
-                      <span className="text-[10px] text-slate-500 font-medium">{loc.state}</span>
+                  <div className="p-2 min-w-[180px] text-xs">
+                    <div className="border-b border-slate-100 pb-1 mb-1.5">
+                      <span className="font-bold text-slate-900 block">{loc.name}</span>
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        {loc.district}, {loc.state}
+                      </span>
                     </div>
+
                     <div className="space-y-1 text-[11px]">
+                      {isPlain ? (
+                        <div className="bg-slate-100 p-1 rounded text-[10px] text-slate-600 font-medium">
+                          Plain Terrain (Insufficient slope/hazard history for landslide prediction)
+                        </div>
+                      ) : (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Landslide Risk:</span>
+                          <span className="font-bold" style={{ color }}>
+                            {loc.risk_category} ({Math.round((loc.risk_probability || 0.2) * 100)}%)
+                          </span>
+                        </div>
+                      )}
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Landslide Risk:</span>
-                        <span className="font-bold" style={{ color }}>
-                          {loc.risk_category} ({Math.round((loc.risk_probability || 0.2) * 100)}%)
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Rainfall (24h):</span>
-                        <span className="font-semibold text-slate-800">{loc.rainfall_24h || 25} mm</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Slope / Elevation:</span>
-                        <span className="font-semibold text-slate-800">{loc.slope}° / {loc.elevation}m</span>
+                        <span className="text-slate-500">Elevation / Slope:</span>
+                        <span className="font-semibold text-slate-800">{loc.elevation}m / {loc.slope}°</span>
                       </div>
                     </div>
+
                     <button
                       onClick={() => onSelectLocation(loc)}
                       className="w-full mt-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-semibold transition-colors"
                     >
-                      Inspect Location
+                      Inspect District
                     </button>
                   </div>
                 </Popup>
@@ -195,7 +208,7 @@ export default function RiskMap({
         </div>
 
         {/* Floating Bottom Legend */}
-        <div className="absolute bottom-3 left-3 z-[1000] bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200/90 shadow-md text-xs flex items-center space-x-3">
+        <div className="absolute bottom-3 left-3 z-[1000] bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200/90 shadow-md text-xs flex flex-wrap items-center gap-3">
           <div className="flex items-center space-x-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
             <span className="text-[11px] font-medium text-slate-700">Low Risk</span>
@@ -207,6 +220,10 @@ export default function RiskMap({
           <div className="flex items-center space-x-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
             <span className="text-[11px] font-medium text-slate-700">High Risk</span>
+          </div>
+          <div className="flex items-center space-x-1.5 border-l border-slate-200 pl-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+            <span className="text-[11px] font-medium text-slate-500">Plain / Low Hazard</span>
           </div>
         </div>
       </div>

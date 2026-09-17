@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import JSONResponse
 
@@ -9,7 +9,7 @@ from backend.app.core.config import settings
 from backend.app.models.schema import (
     LocationResponse, PredictRequest, PredictResponse,
     SimulationRequest, SimulationResponse, AlertItem,
-    SatelliteInfoResponse
+    SatelliteInfoResponse, StateDistrictHierarchyItem
 )
 from backend.app.services.weather_service import fetch_live_weather, get_fallback_weather
 from backend.app.services.satellite_service import compute_satellite_indices, get_available_layers
@@ -18,7 +18,6 @@ from backend.app.services.alert_service import get_recent_alerts, create_alert, 
 
 router = APIRouter()
 
-# Load cached 250 locations
 DATA_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "ne_india_locations.json"
 LOCATIONS_CACHE = []
 
@@ -33,36 +32,73 @@ def get_all_cached_locations():
     return LOCATIONS_CACHE
 
 @router.get("/locations", response_model=List[LocationResponse])
-async def get_locations(state: Optional[str] = None, risk: Optional[str] = None):
+async def get_locations(
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    risk: Optional[str] = None
+):
     """
-    Returns list of monitored vulnerable locations across Northeast India.
-    Supports filtering by State and Risk Category.
+    Returns list of locations across India. Supports State, District, and Risk filtering.
     """
     locs = get_all_cached_locations()
     if state:
-        locs = [l for l in locs if l["state"].lower() == state.lower()]
+        locs = [l for l in locs if l.get("state", "").lower() == state.lower()]
+    if district:
+        locs = [l for l in locs if l.get("district", "").lower() == district.lower()]
     if risk:
-        locs = [l for l in locs if l["risk_category"].lower() == risk.lower()]
+        locs = [l for l in locs if risk.lower() in l.get("risk_category", "").lower()]
     return locs
+
+@router.get("/hierarchy", response_model=List[StateDistrictHierarchyItem])
+async def get_state_district_hierarchy():
+    """
+    Returns all Indian States, their constituent districts, and whether active hazard monitoring is enabled.
+    """
+    locs = get_all_cached_locations()
+    state_map = {}
+
+    for loc in locs:
+        st = loc.get("state", "Unknown")
+        dist = loc.get("district", st)
+        tier = loc.get("coverage_tier", "FULL_HAZARD_MONITORING")
+
+        if st not in state_map:
+            state_map[st] = {
+                "state": st,
+                "districts": set(),
+                "total_locations": 0,
+                "hazard_monitoring_active": False
+            }
+
+        state_map[st]["districts"].add(dist)
+        state_map[st]["total_locations"] += 1
+        if tier == "FULL_HAZARD_MONITORING":
+            state_map[st]["hazard_monitoring_active"] = True
+
+    hierarchy = []
+    for st, data in sorted(state_map.items()):
+        hierarchy.append(StateDistrictHierarchyItem(
+            state=st,
+            districts=sorted(list(data["districts"])),
+            total_locations=data["total_locations"],
+            hazard_monitoring_active=data["hazard_monitoring_active"]
+        ))
+
+    return hierarchy
 
 @router.get("/location/{loc_id}")
 async def get_location_detail(loc_id: int):
     """
-    Returns full details for a single monitored location, combining static terrain parameters,
-    live Open-Meteo weather readings, near-real-time satellite indices, and live ML risk score.
+    Returns full details for a location with State and District taxonomy, live weather, and ML risk scores.
     """
     locs = get_all_cached_locations()
     loc = next((l for l in locs if l["id"] == loc_id), None)
     if not loc:
         raise HTTPException(status_code=404, detail=f"Location ID {loc_id} not found.")
 
-    # Fetch live weather for location
     weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
-
-    # Compute satellite indices
     satellite = compute_satellite_indices(loc["elevation"], loc["slope"], loc["latitude"], loc["longitude"])
 
-    # Combine into prediction feature vector
     combined_features = dict(loc)
     combined_features.update({
         "rainfall_1h": weather.get("rainfall_1h", 0.0),
@@ -77,10 +113,20 @@ async def get_location_detail(loc_id: int):
         "flood_extent_flag": satellite.get("flood_extent_flag", loc.get("flood_extent_flag", False))
     })
 
-    # Run ML inference
-    ml_result = predict_risk(combined_features)
+    if loc.get("has_prediction", True):
+        ml_result = predict_risk(combined_features)
+    else:
+        ml_result = {
+            "risk_probability": 0.05,
+            "risk_category": "Insufficient data (Plain/Low Hazard)",
+            "flood_risk_probability": 0.10 if loc["elevation"] < 100 else 0.02,
+            "flood_risk_category": "Low",
+            "key_risk_factors": {"heavy_rainfall": 10, "steep_slope": 5, "land_cover_change": 10, "historical_landslide": 0},
+            "top_factors": {"slope": -1.2, "elevation": -0.8},
+            "shap_values": {"slope": -1.2, "elevation": -0.8},
+            "model_version": "LANDSAFE-XGBoost-v1.0 (Plain Zone Notice)"
+        }
 
-    # Check alert thresholds
     threshold_eval = evaluate_threshold_breach(loc, weather, ml_result)
 
     return {
@@ -95,18 +141,11 @@ async def get_location_detail(loc_id: int):
 
 @router.get("/weather/{lat}/{lon}")
 async def get_weather(lat: float, lon: float):
-    """
-    Returns live weather data, 7-day rainfall history, and 5-day forecast for coordinates.
-    """
     weather_data = await fetch_live_weather(lat, lon)
     return weather_data
 
 @router.post("/predict", response_model=PredictResponse)
 async def predict_custom_landslide(payload: PredictRequest):
-    """
-    Runs real-time landslide risk prediction given custom or live feature parameters.
-    Returns probability, category, flood risk, and SHAP factor contributions.
-    """
     result = predict_risk(payload.model_dump())
     return PredictResponse(
         risk_probability=result["risk_probability"],
@@ -121,9 +160,6 @@ async def predict_custom_landslide(payload: PredictRequest):
 
 @router.post("/predict/flood")
 async def predict_custom_flood(payload: PredictRequest):
-    """
-    Runs multi-hazard flood risk prediction given rainfall and topography parameters.
-    """
     result = predict_risk(payload.model_dump())
     return {
         "flood_risk_probability": result["flood_risk_probability"],
@@ -134,9 +170,6 @@ async def predict_custom_flood(payload: PredictRequest):
 
 @router.get("/risk/{loc_id}")
 async def get_location_risk(loc_id: int):
-    """
-    Returns risk assessment for location ID.
-    """
     locs = get_all_cached_locations()
     loc = next((l for l in locs if l["id"] == loc_id), None)
     if not loc:
@@ -147,6 +180,7 @@ async def get_location_risk(loc_id: int):
         "location_id": loc_id,
         "name": loc["name"],
         "state": loc["state"],
+        "district": loc.get("district", loc["state"]),
         "risk_probability": res["risk_probability"],
         "risk_category": res["risk_category"],
         "key_risk_factors": res["key_risk_factors"],
@@ -156,9 +190,6 @@ async def get_location_risk(loc_id: int):
 
 @router.get("/satellite/{loc_id}", response_model=SatelliteInfoResponse)
 async def get_satellite_info(loc_id: int):
-    """
-    Returns satellite indices (NDSI snow, BSI bare soil, NDVI vegetation, SAR flood) with source and timestamps.
-    """
     locs = get_all_cached_locations()
     loc = next((l for l in locs if l["id"] == loc_id), None)
     if not loc:
@@ -168,6 +199,8 @@ async def get_satellite_info(loc_id: int):
     return SatelliteInfoResponse(
         location_id=loc_id,
         location_name=loc["name"],
+        district=loc.get("district", loc["state"]),
+        state=loc.get("state"),
         snow_cover_pct=sat_data["snow_cover_pct"],
         snowmelt_rate=sat_data["snowmelt_rate"],
         bare_soil_pct=sat_data["bare_soil_pct"],
@@ -181,16 +214,10 @@ async def get_satellite_info(loc_id: int):
 
 @router.get("/satellite/layers/info")
 async def get_satellite_layer_metadata():
-    """
-    Returns configured NASA GIBS, Copernicus Sentinel, and ISRO Bhuvan map layers.
-    """
     return get_available_layers()
 
 @router.get("/alerts")
 async def list_alerts(limit: int = 10):
-    """
-    Returns active early warning alerts.
-    """
     return get_recent_alerts(limit)
 
 @router.post("/alerts")
@@ -203,17 +230,11 @@ async def create_new_alert(
     title: str = Body(...),
     message: str = Body(...)
 ):
-    """
-    Creates a new custom or automated alert.
-    """
     alert = create_alert(location_id, location_name, state, hazard_type, severity, title, message)
     return alert
 
 @router.get("/history/{loc_id}")
 async def get_history(loc_id: int):
-    """
-    Returns 7-day historical risk scores and rainfall readings for location.
-    """
     locs = get_all_cached_locations()
     loc = next((l for l in locs if l["id"] == loc_id), None)
     if not loc:
@@ -229,9 +250,6 @@ async def get_history(loc_id: int):
 
 @router.post("/simulation", response_model=SimulationResponse)
 async def run_simulation(payload: SimulationRequest):
-    """
-    Performs 'What-If' rainfall and slope modification simulation on a location.
-    """
     locs = get_all_cached_locations()
     loc_id = payload.location_id or 1
     loc = next((l for l in locs if l["id"] == loc_id), locs[0] if locs else None)
@@ -253,18 +271,11 @@ async def run_simulation(payload: SimulationRequest):
 
 @router.get("/model/info")
 async def get_ml_model_info():
-    """
-    Returns metadata, benchmark comparisons (XGBoost vs Random Forest vs Logistic Regression),
-    feature importances, and SHAP explainability parameters.
-    """
     info = get_model_info()
     return info
 
 @router.get("/export/report/{loc_id}")
 async def export_risk_report(loc_id: int):
-    """
-    Generates structured risk assessment report with Academic Prototype Disclaimer.
-    """
     locs = get_all_cached_locations()
     loc = next((l for l in locs if l["id"] == loc_id), None)
     if not loc:
@@ -275,7 +286,7 @@ async def export_risk_report(loc_id: int):
     risk = predict_risk(loc)
 
     report = {
-        "title": f"LANDSAFE-NER Hazard Assessment Report — {loc['name']}, {loc['state']}",
+        "title": f"LANDSAFE-NER Hazard Assessment Report — {loc['name']}, {loc.get('district', '')}, {loc['state']}",
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "academic_disclaimer": settings.PROTOTYPE_DISCLAIMER,
         "location_metadata": loc,
@@ -293,13 +304,6 @@ async def export_risk_report(loc_id: int):
             "flood_risk_category": risk["flood_risk_category"],
             "top_contributing_factors": risk["top_factors"],
             "shap_explanation": risk["shap_values"]
-        },
-        "recommended_monitoring_actions": [
-            "Maintain continuous 24h precipitation logging via Open-Meteo API",
-            "Monitor slope pore-pressure sensors along vulnerable road-cuts",
-            "Track Sentinel-2 Bare Soil Index (BSI) changes after severe weather",
-            "Observe Sentinel-1 SAR backscatter for downstream flood ponding"
-        ]
+        }
     }
-
     return report

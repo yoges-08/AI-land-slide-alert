@@ -14,11 +14,14 @@ class Location(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False, index=True)
     state = Column(String(50), nullable=False, index=True)
+    district = Column(String(100), nullable=False, index=True)
+    coverage_tier = Column(String(50), default="FULL_HAZARD_MONITORING")
+    has_prediction = Column(Boolean, default=True)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     elevation = Column(Float, nullable=False)
     slope = Column(Float, nullable=False)
-    aspect = Column(String(10), default="N")
+    aspect = Column(String(20), default="N")
     soil_type = Column(String(50), default="Loam")
     geology = Column(String(100), default="Phyllite & Schist")
     land_cover = Column(String(50), default="Dense Forest")
@@ -80,10 +83,10 @@ class PredictionRecord(Base):
     location_id = Column(Integer, ForeignKey("locations.id"), nullable=False, index=True)
     predicted_at = Column(DateTime, default=datetime.utcnow)
     risk_probability = Column(Float, nullable=False)
-    risk_category = Column(String(20), nullable=False)  # High, Moderate, Low
+    risk_category = Column(String(50), nullable=False)
     flood_risk_probability = Column(Float, default=0.0)
     flood_risk_category = Column(String(20), default="Low")
-    top_factors = Column(Text, nullable=True)  # JSON string
+    top_factors = Column(Text, nullable=True)
     is_simulated = Column(Boolean, default=False)
 
     location = relationship("Location", back_populates="predictions")
@@ -95,8 +98,8 @@ class AlertRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     location_id = Column(Integer, ForeignKey("locations.id"), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    hazard_type = Column(String(30), default="Landslide")  # Landslide or Flood
-    severity = Column(String(20), default="High")  # Critical, High, Moderate, Low
+    hazard_type = Column(String(30), default="Landslide")
+    severity = Column(String(20), default="High")
     title = Column(String(150), nullable=False)
     message = Column(Text, nullable=False)
     is_active = Column(Boolean, default=True)
@@ -116,6 +119,9 @@ class KeyRiskFactors(BaseModel):
 class LocationBase(BaseModel):
     name: str
     state: str
+    district: Optional[str] = None
+    coverage_tier: Optional[str] = "FULL_HAZARD_MONITORING"
+    has_prediction: Optional[bool] = True
     latitude: float
     longitude: float
     elevation: float
@@ -131,7 +137,7 @@ class LocationBase(BaseModel):
 
 class LocationResponse(LocationBase):
     id: int
-    risk_probability: float = 0.25
+    risk_probability: Optional[float] = 0.25
     risk_category: str = "Low"
     flood_risk_category: str = "Low"
     snow_cover_pct: float = 0.0
@@ -147,6 +153,12 @@ class LocationResponse(LocationBase):
 
     class Config:
         from_attributes = True
+
+class StateDistrictHierarchyItem(BaseModel):
+    state: str
+    districts: List[str]
+    total_locations: int
+    hazard_monitoring_active: bool
 
 class PredictRequest(BaseModel):
     latitude: float
@@ -183,7 +195,7 @@ class PredictResponse(BaseModel):
 
 class SimulationRequest(BaseModel):
     location_id: Optional[int] = None
-    rainfall_24h_delta: float = 0.0  # Simulated additional rainfall
+    rainfall_24h_delta: float = 0.0
     slope_override: Optional[float] = None
     snowmelt_rate_override: Optional[float] = None
     bare_soil_pct_override: Optional[float] = None
@@ -205,6 +217,7 @@ class AlertItem(BaseModel):
     location_id: int
     location_name: str
     state: str
+    district: Optional[str] = None
     hazard_type: str
     severity: str
     title: str
@@ -216,6 +229,8 @@ class AlertItem(BaseModel):
 class SatelliteInfoResponse(BaseModel):
     location_id: int
     location_name: str
+    district: Optional[str] = None
+    state: Optional[str] = None
     snow_cover_pct: float
     snowmelt_rate: float
     bare_soil_pct: float

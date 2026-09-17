@@ -9,7 +9,8 @@ import {
   Sparkles,
   Compass,
   Mountain,
-  Droplet
+  Droplet,
+  ShieldCheck
 } from 'lucide-react';
 import RiskFactorBar from './RiskFactorBar';
 import DataSourceTag from './DataSourceTag';
@@ -25,9 +26,9 @@ export default function LocationDetails({
     return (
       <div className="bg-white rounded-2xl p-6 border border-slate-200/90 shadow-sm h-full flex flex-col items-center justify-center text-center">
         <MapPin className="w-10 h-10 text-slate-300 mb-2 stroke-1" />
-        <p className="text-sm font-semibold text-slate-700">Select a Location</p>
+        <p className="text-sm font-semibold text-slate-700">Select a Location / District</p>
         <p className="text-xs text-slate-400 mt-1 max-w-[200px]">
-          Click any risk marker on the map to inspect terrain features and ML predictions.
+          Click any state or district marker on the map to inspect terrain features and ML hazard predictions.
         </p>
       </div>
     );
@@ -35,12 +36,14 @@ export default function LocationDetails({
 
   const name = location.name || 'Gangtok';
   const state = location.state || 'Sikkim';
+  const district = location.district || state;
   const lat = location.latitude ? location.latitude.toFixed(2) : '27.33';
   const lon = location.longitude ? location.longitude.toFixed(2) : '88.62';
   const elevation = location.elevation ? location.elevation.toLocaleString() : '1,480';
   const slope = location.slope ? location.slope.toFixed(0) : '34';
   const soilType = location.soil_type || 'Loam';
   const rain24h = liveWeather?.rainfall_24h ?? location.rainfall_24h ?? 142;
+  const hasPrediction = location.has_prediction !== false;
   const prob = location.risk_probability ? Math.round(location.risk_probability * 100) : 82;
   const category = location.risk_category || (prob >= 70 ? 'High Risk' : prob >= 30 ? 'Moderate Risk' : 'Low Risk');
   const floodCategory = location.flood_risk_category || 'Low';
@@ -52,13 +55,13 @@ export default function LocationDetails({
     historical_landslide: 49
   };
 
-  const imageSrc = location.image_url || 'https://images.unsplash.com/photo-1626621341517-bbf3d9990a23?w=500&auto=format&fit=crop&q=60';
+  const imageSrc = location.image_url || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=500&auto=format&fit=crop&q=60';
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 flex flex-col justify-between h-full relative overflow-hidden">
-      {/* Card Header with Image and Close */}
       <div>
-        <div className="relative rounded-xl overflow-hidden mb-3.5 border border-slate-100 shadow-sm">
+        {/* Card Header with Image and Coordinates */}
+        <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 shadow-sm">
           <img
             src={imageSrc}
             alt={name}
@@ -77,33 +80,47 @@ export default function LocationDetails({
           </div>
         </div>
 
-        {/* Title & Coordinates */}
+        {/* Title, District & State */}
         <div className="flex items-start justify-between">
           <div>
             <h3 className="text-base font-bold text-slate-900 leading-tight">{name}</h3>
-            <p className="text-xs text-slate-500 font-medium">{state}</p>
+            <p className="text-xs text-slate-500 font-medium">
+              District: <span className="text-slate-800 font-semibold">{district}</span> • {state}
+            </p>
           </div>
           <DataSourceTag source={location.satellite_source || 'NASA/Copernicus'} isSample={location.is_sample_data} />
         </div>
 
-        {/* Risk Probability Banner */}
-        <div className="mt-3 bg-red-50/70 border border-red-100 rounded-xl p-3 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className="w-7 h-7 rounded-lg bg-red-500 text-white flex items-center justify-center shadow-xs">
-              <AlertTriangle className="w-4 h-4" />
+        {/* Risk Probability Banner OR Plain District Notice */}
+        {hasPrediction ? (
+          <div className="mt-3 bg-red-50/70 border border-red-100 rounded-xl p-3 flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className="w-7 h-7 rounded-lg bg-red-500 text-white flex items-center justify-center shadow-xs">
+                <AlertTriangle className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-xs font-bold text-red-700 block leading-tight">
+                  {category.includes('Risk') ? category : `${category} Risk`}
+                </span>
+                <span className="text-[10px] text-red-600/80 font-medium">Prototype Threshold</span>
+              </div>
             </div>
+            <div className="text-right">
+              <span className="text-xl font-extrabold text-red-600 leading-none">{prob}%</span>
+              <span className="text-[10px] text-slate-500 block font-medium">Risk Probability</span>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center space-x-2.5">
+            <ShieldCheck className="w-6 h-6 text-slate-400 flex-shrink-0" />
             <div>
-              <span className="text-xs font-bold text-red-700 block leading-tight">
-                {category.includes('Risk') ? category : `${category} Risk`}
-              </span>
-              <span className="text-[10px] text-red-600/80 font-medium">Prototype Threshold</span>
+              <span className="text-xs font-bold text-slate-700 block">Plain Terrain (Low Hazard Zone)</span>
+              <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
+                Insufficient slope gradient / historical landslide ground-truth for ML trigger prediction.
+              </p>
             </div>
           </div>
-          <div className="text-right">
-            <span className="text-xl font-extrabold text-red-600 leading-none">{prob}%</span>
-            <span className="text-[10px] text-slate-500 block font-medium">Risk Probability</span>
-          </div>
-        </div>
+        )}
 
         {/* Secondary Hazard Badge (Flood Risk) */}
         <div className="mt-2 flex items-center justify-between px-3 py-1.5 bg-blue-50/60 border border-blue-100/80 rounded-lg text-xs">
@@ -134,20 +151,22 @@ export default function LocationDetails({
         </div>
 
         {/* Key Risk Factors */}
-        <div className="mt-3.5 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-bold text-slate-800 text-xs flex items-center gap-1">
-              Key Risk Factors
-              <Info className="w-3 h-3 text-slate-400 inline" />
-            </span>
-            <span className="text-[10px] text-slate-400 font-medium">ML Feature Contribution</span>
-          </div>
+        {hasPrediction && (
+          <div className="mt-3.5 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-800 text-xs flex items-center gap-1">
+                Key Risk Factors
+                <Info className="w-3 h-3 text-slate-400 inline" />
+              </span>
+              <span className="text-[10px] text-slate-400 font-medium">ML Feature Contribution</span>
+            </div>
 
-          <RiskFactorBar label="Heavy Rainfall" percentage={factors.heavy_rainfall ?? 92} color="red" />
-          <RiskFactorBar label="Steep Slope" percentage={factors.steep_slope ?? 78} color="orange" />
-          <RiskFactorBar label="Land Cover Change" percentage={factors.land_cover_change ?? 56} color="amber" />
-          <RiskFactorBar label="Historical Landslide" percentage={factors.historical_landslide ?? 49} color="yellow" />
-        </div>
+            <RiskFactorBar label="Heavy Rainfall" percentage={factors.heavy_rainfall ?? 92} color="red" />
+            <RiskFactorBar label="Steep Slope" percentage={factors.steep_slope ?? 78} color="orange" />
+            <RiskFactorBar label="Land Cover Change" percentage={factors.land_cover_change ?? 56} color="amber" />
+            <RiskFactorBar label="Historical Landslide" percentage={factors.historical_landslide ?? 49} color="yellow" />
+          </div>
+        )}
 
         {/* Satellite Terrain Intelligence Breakdown */}
         <div className="mt-3 pt-2.5 border-t border-slate-100">
