@@ -201,15 +201,17 @@ async def get_satellite_info(loc_id: int):
         location_name=loc["name"],
         district=loc.get("district", loc["state"]),
         state=loc.get("state"),
-        snow_cover_pct=sat_data["snow_cover_pct"],
-        snowmelt_rate=sat_data["snowmelt_rate"],
-        bare_soil_pct=sat_data["bare_soil_pct"],
-        vegetation_index=sat_data["vegetation_index"],
-        farm_change_flag=sat_data["farm_change_flag"],
-        flood_extent_flag=sat_data["flood_extent_flag"],
-        source=sat_data["source"],
-        last_updated=sat_data["last_updated"],
-        disclaimer=sat_data["disclaimer"]
+        status=sat_data.get("status", "NOMINAL"),
+        snow_cover_pct=sat_data.get("snow_cover_pct"),
+        snowmelt_rate=sat_data.get("snowmelt_rate"),
+        bare_soil_pct=sat_data.get("bare_soil_pct"),
+        vegetation_index=sat_data.get("vegetation_index"),
+        farm_change_flag=sat_data.get("farm_change_flag", False),
+        flood_extent_flag=sat_data.get("flood_extent_flag", False),
+        source=sat_data.get("source", "Copernicus / NASA"),
+        quality_flag=sat_data.get("quality_flag", "NOMINAL"),
+        last_updated=sat_data.get("last_updated"),
+        disclaimer=sat_data.get("disclaimer", settings.PROTOTYPE_DISCLAIMER)
     )
 
 @router.get("/satellite/layers/info")

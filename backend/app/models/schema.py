@@ -231,12 +231,14 @@ class SatelliteInfoResponse(BaseModel):
     location_name: str
     district: Optional[str] = None
     state: Optional[str] = None
-    snow_cover_pct: float
-    snowmelt_rate: float
-    bare_soil_pct: float
-    vegetation_index: float
-    farm_change_flag: bool
-    flood_extent_flag: bool
-    source: str
-    last_updated: str
-    disclaimer: str
+    status: Optional[str] = "NOMINAL"
+    snow_cover_pct: Optional[float] = None
+    snowmelt_rate: Optional[float] = None
+    bare_soil_pct: Optional[float] = None
+    vegetation_index: Optional[float] = None
+    farm_change_flag: Optional[bool] = False
+    flood_extent_flag: Optional[bool] = False
+    source: str = "Copernicus / NASA"
+    quality_flag: Optional[str] = "NOMINAL"
+    last_updated: Optional[str] = None
+    disclaimer: str = "Advisory satellite data layer."

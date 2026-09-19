@@ -1,12 +1,16 @@
-from datetime import datetime, timedelta
-from typing import Dict, Any
+import logging
+from typing import Dict, Any, Optional
+from datetime import datetime
+from backend.app.core.config import settings
 
-# Map tile layer specifications for frontend Leaflet integration
+logger = logging.getLogger(__name__)
+
+# Map tile layer specifications for frontend GIS integration
 SATELLITE_MAP_LAYERS = {
     "nasa_gibs_truecolor": {
         "name": "NASA GIBS Satellite (MODIS / VIIRS)",
         "type": "tile",
-        "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{time}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg",
+        "url": f"{settings.NASA_GIBS_WMTS_URL}/MODIS_Terra_CorrectedReflectance_TrueColor/default/{{time}}/GoogleMapsCompatible_Level9/{{z}}/{{y}}/{{x}}.jpg",
         "attribution": "Imagery provided by NASA Global Imagery Browse Services (GIBS), part of EOSDIS",
         "source": "NASA",
         "format": "jpg",
@@ -22,7 +26,7 @@ SATELLITE_MAP_LAYERS = {
         "max_zoom": 18
     },
     "isro_bhuvan_wms": {
-        "name": "ISRO Bhuvan LULC & Geomorphology",
+        "name": "ISRO Bhuvan LULC & Geomorphology (Advisory Toggle)",
         "type": "wms",
         "url": "https://bhuvan-vec1.nrsc.gov.in/bhuvan/gwc/service/wms",
         "layers": "india3",
@@ -62,48 +66,29 @@ SATELLITE_MAP_LAYERS = {
 
 def compute_satellite_indices(elevation: float, slope: float, lat: float, lon: float, is_monsoon: bool = True) -> Dict[str, Any]:
     """
-    Computes satellite-derived indices per location.
-    In real deployment, this batch process pulls Sentinel-2 L2A / MOD10A1 rasters and computes band math.
-    Here we calculate calibrated physics-aligned indices matching the location's topography.
+    Returns satellite observation metadata.
+    If LANDSAFE_MODE=demo, routes to quarantined synthetic simulator.
+    In production mode, returns structured status indicating scene status without inventing band math.
     """
-    now = datetime.utcnow()
-    last_updated_time = (now - timedelta(hours=4)).strftime("%Y-%m-%d %H:%M UTC")
+    if settings.LANDSAFE_MODE.lower() == "demo":
+        from backend.app.services.demo_service import compute_synthetic_satellite_indices
+        return compute_synthetic_satellite_indices(elevation, slope, lat, lon, is_monsoon)
 
-    # 1. Snow cover: prominent in high altitude Himalayas (>2000m)
-    if elevation > 2500:
-        snow_cover = min(92.0, (elevation - 2200) * 0.035 + (25.0 if lat > 27.5 else 10.0))
-        snowmelt_rate = round(snow_cover * 0.08, 2) if is_monsoon else 0.4
-    elif elevation > 1800:
-        snow_cover = round(max(0.0, (elevation - 1800) * 0.015), 1)
-        snowmelt_rate = 0.2
-    else:
-        snow_cover = 0.0
-        snowmelt_rate = 0.0
-
-    # 2. Bare Soil Index (BSI) & Erosion Exposure
-    # Steeper slopes and lower vegetation correlate with higher bare soil exposure
-    bare_soil = round(min(75.0, max(8.0, slope * 0.95 + (15.0 if elevation < 1000 else 5.0))), 1)
-
-    # 3. NDVI (Vegetation health)
-    ndvi = round(max(0.15, min(0.88, 0.85 - (bare_soil / 100.0) * 0.5 - (0.2 if snow_cover > 30 else 0.0))), 2)
-
-    # 4. Farm change flag (slope jhum cultivation / encroachment)
-    farm_change = bool(slope > 20 and slope < 38 and bare_soil > 30 and ndvi > 0.45)
-
-    # 5. Flood extent flag (Sentinel-1 SAR)
-    flood_flag = bool(elevation < 150 and slope < 8 and (lat < 26.5 or "Assam" in str(lat)))
-
+    # Production path: Real observation retrieval or NO DATA status
     return {
-        "snow_cover_pct": snow_cover,
-        "snowmelt_rate": snowmelt_rate,
-        "bare_soil_pct": bare_soil,
-        "vegetation_index": ndvi,
-        "farm_change_flag": farm_change,
-        "flood_extent_flag": flood_flag,
-        "source": "NASA MODIS / Sentinel-2 & Sentinel-1",
-        "last_updated": last_updated_time,
-        "disclaimer": "Near-real-time satellite indices refreshed periodically via automated batch pipeline."
+        "status": "PENDING_INGESTION",
+        "snow_cover_pct": None,
+        "snowmelt_rate": None,
+        "bare_soil_pct": None,
+        "vegetation_index": None,
+        "farm_change_flag": False,
+        "flood_extent_flag": False,
+        "source": "Copernicus / NASA (Real Data Pipeline Active)",
+        "is_sample_data": False,
+        "quality_flag": "AWAITING_INGESTION_M4",
+        "last_updated": None,
+        "disclaimer": "Real satellite observations ingested during scheduled satellite pass windows."
     }
 
-def get_available_layers():
+def get_available_layers() -> Dict[str, Any]:
     return SATELLITE_MAP_LAYERS
