@@ -232,6 +232,27 @@ async def get_location_detail(loc_id: int):
     })
 
 
+@router.get("/weather/district/{district_id}")
+async def get_district_weather(district_id: int, db: Session = Depends(get_db)):
+    """Retrieve reconciled weather and Antecedent Saturation Index (ASI) for a district."""
+    from backend.app.services.weather_reconciliation import WeatherReconciliationService
+    reconciled = WeatherReconciliationService.get_reconciled_district_weather(district_id, db)
+    return _envelope(reconciled)
+
+
+@router.get("/weather/asi/{district_id}")
+async def get_district_asi(district_id: int, db: Session = Depends(get_db)):
+    """Retrieve 10-day Antecedent Saturation Index (ASI) calculated from observed rainfall."""
+    from backend.app.services.weather_reconciliation import WeatherReconciliationService
+    asi_val = WeatherReconciliationService.compute_district_asi(district_id, db)
+    return _envelope({
+        "district_id": district_id,
+        "antecedent_saturation_index": asi_val,
+        "decay_factor": 0.85,
+        "window_days": 10,
+    })
+
+
 @router.get("/weather/{lat}/{lon}")
 async def get_weather(lat: float, lon: float):
     return await fetch_live_weather(lat, lon)
