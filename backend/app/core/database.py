@@ -1,9 +1,8 @@
 import os
 import logging
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 from backend.app.core.config import settings
-from backend.app.models.db_models import Base
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +17,7 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 def init_db():
     """Create tables if they do not exist."""

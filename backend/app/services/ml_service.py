@@ -1,3 +1,16 @@
+"""Model inference and SHAP attribution.
+
+M0, confirmed defect 6: the shipped model was trained on synthetic data whose
+labels were computed from a hand-weighted sigmoid of the same features
+(train_models.py). Its outputs are not probabilities of anything observable, so
+every "probability"/"confidence %" word is removed here and the output is named
+what it is: an uncalibrated hazard index.
+
+The SHAP explainer wiring and the main.py startup hook are real, working
+infrastructure and are kept untouched. Only the meaning of the number changed.
+M6 either retrains on real labelled events with time-based splits, or replaces
+this with a susceptibility x trigger index.
+"""
 import os
 import json
 from pathlib import Path
@@ -79,20 +92,27 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
     X_proc = _PREPROCESSOR.transform(df_in)
 
     # Landslide prediction
-    prob_landslide = float(_LANDSLIDE_MODEL.predict_proba(X_proc)[0, 1])
-    prob_landslide = round(min(0.98, max(0.02, prob_landslide)), 4)
+    # NOT a probability: the model learned to invert a formula, and the output
+    # was additionally clamped to [0.02, 0.98] at baseline. Reported as an
+    # uncalibrated index on [0,1].
+    landslide_index = float(_LANDSLIDE_MODEL.predict_proba(X_proc)[0, 1])
+    landslide_index = round(min(0.98, max(0.02, landslide_index)), 4)
 
-    risk_category = "High" if prob_landslide >= 0.70 else ("Moderate" if prob_landslide >= 0.30 else "Low")
+    risk_category = "High" if landslide_index >= 0.70 else ("Moderate" if landslide_index >= 0.30 else "Low")
 
     # Flood prediction
-    prob_flood = 0.0
+    flood_index = None
     if _FLOOD_MODEL is not None:
         try:
-            prob_flood = float(_FLOOD_MODEL.predict_proba(X_proc)[0, 1])
-            prob_flood = round(min(0.98, max(0.01, prob_flood)), 4)
-        except Exception:
-            prob_flood = 0.15
-    flood_category = "High" if prob_flood >= 0.65 else ("Moderate" if prob_flood >= 0.30 else "Low")
+            flood_index = float(_FLOOD_MODEL.predict_proba(X_proc)[0, 1])
+            flood_index = round(min(0.98, max(0.01, flood_index)), 4)
+        except Exception as exc:
+            # Baseline substituted 0.15 here. A failed inference is not a result.
+            print(f"Flood model inference failed: {exc}")
+            flood_index = None
+    flood_category = (None if flood_index is None else
+                      ("High" if flood_index >= 0.65 else
+                       ("Moderate" if flood_index >= 0.30 else "Low")))
 
     # SHAP feature attributions
     shap_factors = {}
@@ -121,28 +141,37 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
             print(f"SHAP computation warning: {e}")
 
     # Calculate normalized key factor percentage bars matching UI specs
-    rain_24h = features.get("rainfall_24h", 45.0)
-    slope = features.get("slope", 25.0)
-    bare_soil = features.get("bare_soil_pct", 20.0)
-    farm_flag = features.get("farm_change_flag", False)
-    hist = features.get("historical_landslides", 1)
+    # Key-factor bars are display normalisations of the inputs actually supplied.
+    # A factor whose input is absent is None, not a default-derived number.
+    def _bar(value, scale, floor=0, cap=100):
+        if value is None:
+            return None
+        return min(cap, max(floor, int((float(value) / scale) * 100)))
 
     key_factors_pct = {
-        "heavy_rainfall": min(98, max(10, int((rain_24h / 150.0) * 85 + (prob_landslide * 15)))),
-        "steep_slope": min(96, max(12, int((slope / 48.0) * 82 + (prob_landslide * 14)))),
-        "land_cover_change": min(92, max(8, int((bare_soil / 65.0) * 60 + (30 if farm_flag else 0)))),
-        "historical_landslide": min(95, max(5, int((hist / 10.0) * 80 + 10)))
+        "heavy_rainfall": _bar(features.get("rainfall_24h"), 150.0),
+        "steep_slope": _bar(features.get("slope"), 48.0),
+        "land_cover_change": _bar(features.get("bare_soil_pct"), 65.0),
+        "historical_landslide": _bar(features.get("historical_landslides"), 10.0),
     }
 
     return {
-        "risk_probability": prob_landslide,
+        "hazard_index": landslide_index,
         "risk_category": risk_category,
-        "flood_risk_probability": prob_flood,
+        "flood_index": flood_index,
         "flood_risk_category": flood_category,
         "key_risk_factors": key_factors_pct,
         "top_factors": top_factors_summary,
         "shap_values": shap_factors,
-        "model_version": "LANDSAFE-XGBoost-v1.0"
+        "model_version": "LANDSAFE-XGBoost-v1.0",
+        "calibration": "UNCALIBRATED",
+        "index_note": (
+            "Unitless hazard index on [0,1]. NOT a probability, likelihood or "
+            "confidence. The model was trained on synthetic, formula-derived "
+            "labels and has never been validated against observed landslide "
+            "events. Superseded in M6."
+        ),
+        "training_data": "SYNTHETIC — see backend/ml/train_models.py",
     }
 
 def simulate_scenario(base_features: Dict[str, Any], sim_params: Dict[str, Any]) -> Dict[str, Any]:
@@ -172,28 +201,35 @@ def simulate_scenario(base_features: Dict[str, Any], sim_params: Dict[str, Any])
     original_res = predict_risk(base_features)
     simulated_res = predict_risk(sim_features)
 
-    delta_risk = round(simulated_res["risk_probability"] - original_res["risk_probability"], 4)
+    delta_risk = round(simulated_res["hazard_index"] - original_res["hazard_index"], 4)
 
     return {
-        "original_risk_probability": original_res["risk_probability"],
-        "simulated_risk_probability": simulated_res["risk_probability"],
+        "original_hazard_index": original_res["hazard_index"],
+        "simulated_hazard_index": simulated_res["hazard_index"],
         "original_risk_category": original_res["risk_category"],
         "simulated_risk_category": simulated_res["risk_category"],
-        "delta_risk": delta_risk,
-        "simulated_flood_probability": simulated_res["flood_risk_probability"],
+        "delta_index": delta_risk,
+        "simulated_flood_index": simulated_res["flood_index"],
         "simulated_flood_category": simulated_res["flood_risk_category"],
         "simulated_key_factors": simulated_res["key_risk_factors"],
         "factor_changes": {
-            "rainfall_24h": {"original": base_features.get("rainfall_24h"), "simulated": sim_features["rainfall_24h"]},
-            "slope": {"original": base_features.get("slope"), "simulated": sim_features["slope"]},
-            "snowmelt_rate": {"original": base_features.get("snowmelt_rate"), "simulated": sim_features["snowmelt_rate"]},
-            "bare_soil_pct": {"original": base_features.get("bare_soil_pct"), "simulated": sim_features["bare_soil_pct"]},
+            "rainfall_24h": {"original": base_features.get("rainfall_24h"), "simulated": sim_features.get("rainfall_24h")},
+            "slope": {"original": base_features.get("slope"), "simulated": sim_features.get("slope")},
+            "snowmelt_rate": {"original": base_features.get("snowmelt_rate"), "simulated": sim_features.get("snowmelt_rate")},
+            "bare_soil_pct": {"original": base_features.get("bare_soil_pct"), "simulated": sim_features.get("bare_soil_pct")},
         }
     }
 
 def get_model_info():
     load_ml_assets()
-    return _METADATA or {
-        "model_name": "LANDSAFE-NER XGBoost Ensemble",
-        "description": "Multi-hazard landslide & flood susceptibility model with satellite terrain feature intelligence."
-    }
+    base = dict(_METADATA or {"model_name": "LANDSAFE-NER XGBoost"})
+    base.update({
+        "calibration": "UNCALIBRATED",
+        "training_data": "SYNTHETIC — labels generated by formula, not observed events",
+        "validated_against_observed_events": False,
+        "output_units": "unitless hazard index on [0,1]",
+        "supersedes": "M6 replaces this with either a retrain on real labelled "
+                      "events (time-based splits, precision/recall by region) or "
+                      "a susceptibility x trigger index.",
+    })
+    return base

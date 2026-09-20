@@ -1,94 +1,125 @@
-import logging
-from typing import Dict, Any, Optional
-from datetime import datetime
-from backend.app.core.config import settings
+"""Satellite layer metadata and (pending) satellite observations.
 
-logger = logging.getLogger(__name__)
+M0, confirmed defect 1: compute_satellite_indices() fabricated snow/NDVI/bare
+soil/flood values from elevation and slope, then labelled them
+"NASA MODIS / Sentinel-2 & Sentinel-1". It has been moved to
+backend/demo/fake_satellite.py and is unreachable in production.
 
-# Map tile layer specifications for frontend GIS integration
-SATELLITE_MAP_LAYERS = {
+Until M4 ingestion lands, satellite observations are NO DATA with the pending
+source named. The SatelliteFeature table shape is fine and is kept; only the
+population function was fake.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from backend.app.core.freshness import no_data
+from backend.app.core.mode import is_demo
+
+# Tile layers actually available to us, free at the tier used.
+# Removed in M0: ESRI World Imagery (arcgisonline) — a commercial service,
+# outside the zero-budget rule and never a decided basemap.
+SATELLITE_MAP_LAYERS: Dict[str, Dict[str, Any]] = {
     "nasa_gibs_truecolor": {
-        "name": "NASA GIBS Satellite (MODIS / VIIRS)",
-        "type": "tile",
-        "url": f"{settings.NASA_GIBS_WMTS_URL}/MODIS_Terra_CorrectedReflectance_TrueColor/default/{{time}}/GoogleMapsCompatible_Level9/{{z}}/{{y}}/{{x}}.jpg",
-        "attribution": "Imagery provided by NASA Global Imagery Browse Services (GIBS), part of EOSDIS",
-        "source": "NASA",
+        "name": "NASA GIBS True Colour (MODIS Terra)",
+        "type": "wmts",
+        # {time} is substituted server-side per request date. Leaflet cannot
+        # fill it, which is why the baseline URL could never have worked as a
+        # plain TileLayer.
+        "url_template": ("https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/"
+                         "MODIS_Terra_CorrectedReflectance_TrueColor/default/"
+                         "{time}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg"),
+        "time_dimension": "required",
+        "attribution": "NASA Global Imagery Browse Services (GIBS), EOSDIS",
+        "source": "NASA GIBS",
+        "licence": "NASA open data",
         "format": "jpg",
-        "max_zoom": 9
-    },
-    "esri_world_imagery": {
-        "name": "High-Res Satellite (ESRI)",
-        "type": "tile",
-        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        "attribution": "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
-        "source": "ESRI / Commercial High-Res",
-        "format": "png",
-        "max_zoom": 18
+        "max_zoom": 9,
+        "status": "VERIFIED",
     },
     "isro_bhuvan_wms": {
-        "name": "ISRO Bhuvan LULC & Geomorphology (Advisory Toggle)",
+        "name": "ISRO Bhuvan LULC (india3)",
         "type": "wms",
         "url": "https://bhuvan-vec1.nrsc.gov.in/bhuvan/gwc/service/wms",
         "layers": "india3",
-        "attribution": "ISRO / NRSC Bhuvan Thematic Services",
-        "source": "ISRO",
-        "format": "image/png"
+        "attribution": "ISRO / NRSC Bhuvan",
+        "source": "ISRO Bhuvan",
+        "licence": "UNCONFIRMED for the india3 layer",
+        "format": "image/png",
+        "status": "PENDING_VERIFICATION",
+        "enabled": False,
+        "note": ("Toggle only, disabled by default. Licence for the india3 layer "
+                 "is unconfirmed and it must be served as a WMS request, not a "
+                 "slippy TileLayer."),
     },
-    "snow_cover_ndsi": {
-        "name": "Snow Cover & Snowmelt (NASA MODIS / Sentinel-2 NDSI)",
-        "type": "overlay",
-        "description": "Normalized Difference Snow Index (Green - SWIR) / (Green + SWIR) monitoring snowpack depletion and meltwater runoff.",
-        "source": "NASA MODIS MOD10A1 / Sentinel-2",
-        "badge_color": "cyan"
-    },
-    "bare_soil_bsi": {
-        "name": "Bare Soil & Erosion Exposure (Sentinel-2 BSI)",
-        "type": "overlay",
-        "description": "Bare Soil Index ((SWIR + Red) - (NIR + Blue)) / ((SWIR + Red) + (NIR + Blue)) detecting exposed friable soil and scars.",
-        "source": "Copernicus Sentinel-2",
-        "badge_color": "amber"
-    },
-    "vegetation_ndvi": {
-        "name": "Vegetation & Slope Agriculture (Sentinel-2 NDVI)",
-        "type": "overlay",
-        "description": "Normalized Difference Vegetation Index tracking canopy health and slope cultivation clearing.",
-        "source": "Copernicus Sentinel-2",
-        "badge_color": "emerald"
-    },
-    "flood_sar": {
-        "name": "SAR Flood Inundation (Sentinel-1 SAR)",
-        "type": "overlay",
-        "description": "C-band Synthetic Aperture Radar backscatter contrast highlighting standing surface water through cloud cover.",
-        "source": "Copernicus Sentinel-1 SAR",
-        "badge_color": "blue"
-    }
 }
 
-def compute_satellite_indices(elevation: float, slope: float, lat: float, lon: float, is_monsoon: bool = True) -> Dict[str, Any]:
-    """
-    Returns satellite observation metadata.
-    If LANDSAFE_MODE=demo, routes to quarantined synthetic simulator.
-    In production mode, returns structured status indicating scene status without inventing band math.
-    """
-    if settings.LANDSAFE_MODE.lower() == "demo":
-        from backend.app.services.demo_service import compute_synthetic_satellite_indices
-        return compute_synthetic_satellite_indices(elevation, slope, lat, lon, is_monsoon)
+# Derived index layers. These describe products we intend to ingest; none of
+# them is populated yet. They are listed so the frontend can render an honest
+# 'source pending' state rather than an empty panel.
+PENDING_INDEX_LAYERS: Dict[str, Dict[str, Any]] = {
+    "soil_moisture_flood_sar": {
+        "name": "SAR soil moisture / flood extent",
+        "primary": "NISAR S-SAR (Bhoonidhi)", "fallback": "Copernicus Sentinel-1",
+        "status": "PENDING", "milestone": "M4",
+        "blocker": "Bhoonidhi account approval",
+    },
+    "vegetation": {
+        "name": "Vegetation / land cover",
+        "primary": "Resourcesat LISS-3/4 (Bhoonidhi)", "fallback": "Copernicus Sentinel-2",
+        "status": "PENDING", "milestone": "M4",
+        "blocker": "Bhoonidhi account approval",
+    },
+    "rainfall_qpe": {
+        "name": "Satellite rainfall (QPE)",
+        "primary": "INSAT-3D/3DR IMSRA (MOSDAC)", "fallback": "NASA GPM IMERG",
+        "status": "PENDING", "milestone": "M3/M4",
+        "blocker": "MOSDAC account",
+    },
+    "fire_hotspots": {
+        "name": "Active fire hotspots",
+        "primary": "NASA FIRMS", "fallback": None,
+        "status": "PENDING", "milestone": "M4", "blocker": "FIRMS MAP_KEY",
+    },
+}
 
-    # Production path: Real observation retrieval or NO DATA status
+_PENDING_REASON = (
+    "Satellite indices are not yet ingested. The baseline values were derived "
+    "from elevation and slope, not from any satellite band, and were removed in M0."
+)
+
+
+def get_satellite_observation(location: dict) -> Dict[str, Any]:
+    """Return real satellite observations, or NO DATA. Never derived values."""
+    if is_demo():
+        from backend.demo.fake_satellite import compute_satellite_indices
+        return compute_satellite_indices(
+            location.get("elevation", 0.0), location.get("slope", 0.0),
+            location.get("latitude", 0.0), location.get("longitude", 0.0),
+        )
+
+    status = no_data(
+        "nisar_ssar",
+        reason=_PENDING_REASON,
+        pending="M4 ingestion: FIRMS -> INSAT-3D/3DR -> NISAR -> Resourcesat",
+    )
     return {
-        "status": "PENDING_INGESTION",
+        "data_status": status,
+        "status": "NO_DATA",
+        "source": "pending — NISAR / Sentinel-1 / Resourcesat / Sentinel-2 (M4)",
         "snow_cover_pct": None,
         "snowmelt_rate": None,
         "bare_soil_pct": None,
         "vegetation_index": None,
-        "farm_change_flag": False,
-        "flood_extent_flag": False,
-        "source": "Copernicus / NASA (Real Data Pipeline Active)",
-        "is_sample_data": False,
-        "quality_flag": "AWAITING_INGESTION_M4",
+        "farm_change_flag": None,
+        "flood_extent_flag": None,
         "last_updated": None,
-        "disclaimer": "Real satellite observations ingested during scheduled satellite pass windows."
+        "pending_sources": PENDING_INDEX_LAYERS,
     }
 
+
 def get_available_layers() -> Dict[str, Any]:
-    return SATELLITE_MAP_LAYERS
+    return {
+        **SATELLITE_MAP_LAYERS,
+        "_pending_index_layers": PENDING_INDEX_LAYERS,
+    }

@@ -1,198 +1,270 @@
+"""Open-Meteo ingestion.
+
+M0 changes, against the two confirmed defects:
+
+  D3  rainfall_24h summed hourly_precip[-24:], which with past_days=6 /
+      forecast_days=6 is the LAST 24 FORECAST hours — roughly six days in the
+      future. Measured error on a fixture: 500 mm reported for a true 100 mm.
+      Now sliced by hourly["time"] against the response's own current time.
+      The 5-day forecast started at day +2 and labelled it "Today"; now keyed
+      to the real current date.
+
+  D2  get_fallback_weather() returned hardcoded values on any exception.
+      Deleted. An unreachable source now returns a DataStatus with no values.
+
+Observed and forecast are separate blocks in the payload so they cannot be
+summed together by accident. Open-Meteo is a ground-model cross-check, not a
+satellite source, and is labelled as such.
+"""
+from __future__ import annotations
+
+import asyncio
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
 import httpx
 
 from backend.app.core.config import settings
+from backend.app.core.freshness import (
+    Provenance, freshness_tier, liveness, no_data, utcnow,
+)
 
 logger = logging.getLogger(__name__)
 
 OPEN_METEO_URL = f"{settings.OPEN_METEO_BASE_URL}/forecast"
+SOURCE_KEY = "open_meteo"
+PRODUCT_ID = "open-meteo/forecast/v1"
 
-# Mapping WMO Weather codes to readable descriptions & icons
 WMO_WEATHER_MAP = {
-    0: ("Clear sky", "Sun"),
-    1: ("Mainly clear", "SunMedium"),
-    2: ("Partly cloudy", "CloudSun"),
-    3: ("Overcast", "Cloud"),
-    45: ("Foggy", "CloudFog"),
-    48: ("Depositing rime fog", "CloudFog"),
-    51: ("Light drizzle", "CloudDrizzle"),
-    53: ("Moderate drizzle", "CloudDrizzle"),
-    55: ("Dense drizzle", "CloudDrizzle"),
-    61: ("Slight rain", "CloudRain"),
-    63: ("Moderate rain", "CloudRain"),
-    65: ("Heavy rain", "CloudRainWind"),
-    71: ("Slight snow", "CloudSnow"),
-    73: ("Moderate snow", "CloudSnow"),
-    75: ("Heavy snow", "Snowflake"),
-    80: ("Slight rain showers", "CloudRain"),
-    81: ("Moderate rain showers", "CloudRain"),
-    82: ("Violent rain showers", "CloudRainWind"),
-    95: ("Thunderstorm", "CloudLightning"),
-    96: ("Thunderstorm with hail", "CloudLightning"),
+    0: ("Clear sky", "Sun"), 1: ("Mainly clear", "SunMedium"),
+    2: ("Partly cloudy", "CloudSun"), 3: ("Overcast", "Cloud"),
+    45: ("Foggy", "CloudFog"), 48: ("Depositing rime fog", "CloudFog"),
+    51: ("Light drizzle", "CloudDrizzle"), 53: ("Moderate drizzle", "CloudDrizzle"),
+    55: ("Dense drizzle", "CloudDrizzle"), 61: ("Slight rain", "CloudRain"),
+    63: ("Moderate rain", "CloudRain"), 65: ("Heavy rain", "CloudRainWind"),
+    71: ("Slight snow", "CloudSnow"), 73: ("Moderate snow", "CloudSnow"),
+    75: ("Heavy snow", "Snowflake"), 80: ("Slight rain showers", "CloudRain"),
+    81: ("Moderate rain showers", "CloudRain"), 82: ("Violent rain showers", "CloudRainWind"),
+    95: ("Thunderstorm", "CloudLightning"), 96: ("Thunderstorm with hail", "CloudLightning"),
     99: ("Heavy thunderstorm with hail", "CloudLightning"),
 }
 
-async def fetch_live_weather(lat: float, lon: float) -> Dict[str, Any]:
-    """
-    Fetches live weather & rainfall observations from Open-Meteo API for given lat/lon.
-    Uses past_days=6 and forecast_days=6.
-    Returns current observation, correct 24h past accumulation, 7-day history, and 5-day forecast.
-    """
+# Last successful fetch per (lat, lon), so an OFFLINE response can state when we
+# last actually had data. In-memory for M0; moves to source_health in M2.
+_LAST_SUCCESS: dict[tuple[float, float], str] = {}
+
+
+def _parse_iso(value: str) -> Optional[datetime]:
+    """Open-Meteo returns local naive ISO strings under the requested timezone."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
+    """Fetch observed + forecast weather, or return NO DATA. Never substitutes."""
     params = {
-        "latitude": lat,
-        "longitude": lon,
-        "current": ["temperature_2m", "relative_humidity_2m", "precipitation", "rain", "weather_code", "wind_speed_10m"],
+        "latitude": lat, "longitude": lon,
+        "current": ["temperature_2m", "relative_humidity_2m", "precipitation",
+                    "rain", "weather_code", "wind_speed_10m"],
         "hourly": ["precipitation", "rain"],
-        "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_sum", "precipitation_probability_max"],
+        "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min",
+                  "precipitation_sum", "precipitation_probability_max"],
         "timezone": "Asia/Kolkata",
         "past_days": 6,
-        "forecast_days": 6
+        "forecast_days": 6,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(OPEN_METEO_URL, params=params)
+    last_error = None
+    for attempt in range(settings.OPEN_METEO_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=settings.OPEN_METEO_TIMEOUT_S) as client:
+                response = await client.get(OPEN_METEO_URL, params=params)
             if response.status_code == 200:
-                data = response.json()
-                return parse_open_meteo_response(data, lat, lon)
-            else:
-                logger.warning(f"Open-Meteo API responded with HTTP {response.status_code} for ({lat}, {lon})")
-                return get_no_data_weather(lat, lon, f"HTTP {response.status_code}")
-    except Exception as e:
-        logger.warning(f"Open-Meteo API fetch failed or timed out for ({lat}, {lon}): {e}")
-        return get_no_data_weather(lat, lon, str(e))
+                parsed = parse_open_meteo_response(response.json(), lat, lon)
+                _LAST_SUCCESS[(lat, lon)] = parsed["data_status"]["observed_at"] or utcnow().isoformat()
+                return parsed
+            last_error = f"HTTP {response.status_code}"
+        except Exception as exc:  # noqa: BLE001 - any transport failure is NO DATA
+            last_error = f"{type(exc).__name__}: {exc}"
+        if attempt < settings.OPEN_METEO_RETRIES:
+            await asyncio.sleep(0.5 * (2 ** attempt))
 
-def parse_open_meteo_response(data: dict, lat: float, lon: float) -> Dict[str, Any]:
-    current = data.get("current", {})
-    daily = data.get("daily", {})
-    hourly = data.get("hourly", {})
+    logger.warning("Open-Meteo unavailable for (%s, %s): %s", lat, lon, last_error)
+    return unavailable(lat, lon, last_error or "unknown error")
 
-    temp = current.get("temperature_2m")
-    humidity = current.get("relative_humidity_2m")
-    wind_speed = current.get("wind_speed_10m")
-    rainfall_1h = current.get("precipitation", 0.0)
-    wmo_code = current.get("weather_code", 0)
-    condition_text, icon_name = WMO_WEATHER_MAP.get(wmo_code, ("Variable", "Cloud"))
 
-    # Correct 24h rainfall calculation:
-    # Hourly data has past_days=6 (144 hrs) + today (24 hrs) + forecast_days=6 (144 hrs) = 312 hrs
-    hourly_time = hourly.get("time", [])
-    hourly_precip = hourly.get("precipitation", [])
-    current_time_str = current.get("time", "")
+def unavailable(lat: float, lon: float, reason: str) -> dict[str, Any]:
+    """The replacement for get_fallback_weather(). Carries no values."""
+    return {
+        "data_status": no_data(
+            SOURCE_KEY,
+            reason=f"Open-Meteo unreachable ({reason})",
+            last_success_at=_LAST_SUCCESS.get((lat, lon)),
+            offline=True,
+        ),
+        "status": "OFFLINE",
+        "source": "Open-Meteo",
+        "observed": None,
+        "forecast": None,
+        # Legacy top-level keys kept so existing consumers do not KeyError.
+        # Explicitly null: no observation is available.
+        "temperature": None, "humidity": None, "wind_speed": None,
+        "rainfall_1h": None, "rainfall_24h": None, "rainfall_7d_cumulative": None,
+        "weather_code": None, "condition_text": None, "icon_name": None,
+        "rainfall_trend_7d": [], "forecast_5d": [],
+        "last_updated": None,
+    }
 
-    # Locate the hour corresponding to current time or fallback to end of past_days window
-    curr_idx = -1
-    if current_time_str and current_time_str in hourly_time:
-        curr_idx = hourly_time.index(current_time_str)
-    elif len(hourly_precip) >= 168:
-        # Default to end of past 6 days + current day's first few hours
-        curr_idx = 144
 
-    if curr_idx >= 0 and len(hourly_precip) > 0:
-        start_24h_idx = max(0, curr_idx - 23)
-        past_24h_slice = [p for p in hourly_precip[start_24h_idx : curr_idx + 1] if p is not None]
-        rain_24h = sum(past_24h_slice)
-    else:
-        rain_24h = rainfall_1h
+def _observed_window_sum(hourly_times: list[str], values: list, now: datetime,
+                         hours: int) -> tuple[Optional[float], int]:
+    """Sum the `hours` hours ENDING NOW. Forecast hours are excluded by time.
 
-    # 7-day rainfall trend data for chart (Past 6 days + Today = 7 days)
-    daily_time = daily.get("time", [])
-    daily_precip = daily.get("precipitation_sum", [])
-    daily_codes = daily.get("weather_code", [])
-    daily_max = daily.get("temperature_2m_max", [])
-    daily_min = daily.get("temperature_2m_min", [])
+    This is the D3 fix. Position-based slicing cannot distinguish past from
+    future; timestamp comparison can.
+    """
+    if not hourly_times or not values:
+        return None, 0
+    window_start = now - timedelta(hours=hours)
+    total, count = 0.0, 0
+    for ts_str, val in zip(hourly_times, values):
+        ts = _parse_iso(ts_str)
+        if ts is None or val is None:
+            continue
+        if window_start < ts <= now:          # strictly past-or-present only
+            total += float(val)
+            count += 1
+    if count == 0:
+        return None, 0
+    return round(total, 1), count
 
-    # Today is at index 6 when past_days=6
-    today_idx = 6 if len(daily_time) > 6 else max(0, len(daily_time) - 1)
 
+def parse_open_meteo_response(data: dict, lat: float, lon: float) -> dict[str, Any]:
+    current = data.get("current", {}) or {}
+    daily = data.get("daily", {}) or {}
+    hourly = data.get("hourly", {}) or {}
+
+    now = _parse_iso(current.get("time", "")) or datetime.now()
+    received_at = utcnow()
+
+    wmo_code = current.get("weather_code")
+    condition_text, icon_name = WMO_WEATHER_MAP.get(wmo_code, (None, None))
+
+    hourly_times = hourly.get("time", []) or []
+    hourly_precip = hourly.get("precipitation", []) or []
+
+    # D3 FIX: the 24 hours ending now, not the last 24 array entries.
+    rain_24h, hours_counted = _observed_window_sum(hourly_times, hourly_precip, now, 24)
+
+    daily_time = daily.get("time", []) or []
+    daily_precip = daily.get("precipitation_sum", []) or []
+    daily_codes = daily.get("weather_code", []) or []
+    daily_max = daily.get("temperature_2m_max", []) or []
+    daily_min = daily.get("temperature_2m_min", []) or []
+
+    today = now.date()
+    today_idx = next((i for i, d in enumerate(daily_time)
+                      if _parse_iso(d) and _parse_iso(d).date() == today), None)
+
+    # Observed rainfall trend: past days up to and including today.
     rainfall_trend_7d = []
-    trend_start = max(0, today_idx - 6)
-    for i in range(trend_start, min(today_idx + 1, len(daily_time))):
-        dt_str = daily_time[i]
-        val = daily_precip[i] if i < len(daily_precip) and daily_precip[i] is not None else 0.0
-        try:
-            dt = datetime.strptime(dt_str, "%Y-%m-%d")
-            label = "Today" if i == today_idx else dt.strftime("%b %d")
-        except Exception:
-            label = dt_str
-        rainfall_trend_7d.append({"date": label, "rainfall_mm": round(val, 1)})
+    if today_idx is not None:
+        for i in range(max(0, today_idx - 6), today_idx + 1):
+            dt = _parse_iso(daily_time[i])
+            val = daily_precip[i] if i < len(daily_precip) else None
+            rainfall_trend_7d.append({
+                "date": dt.strftime("%b %d") if dt else daily_time[i],
+                "iso_date": daily_time[i],
+                "rainfall_mm": round(float(val), 1) if val is not None else None,
+            })
 
-    # Next 5-Day Forecast (starts at Today / index today_idx, up to 5 days)
+    rain_7d = None
+    observed_days = [d["rainfall_mm"] for d in rainfall_trend_7d if d["rainfall_mm"] is not None]
+    if observed_days:
+        rain_7d = round(sum(observed_days), 1)
+
+    # D3 FIX (second half): the forecast starts at TODAY, not today + 2.
     forecast_5d = []
-    for i in range(today_idx, min(today_idx + 5, len(daily_time))):
-        dt_str = daily_time[i]
-        try:
-            dt = datetime.strptime(dt_str, "%Y-%m-%d")
-            day_name = "Today" if i == today_idx else dt.strftime("%a")
-        except Exception:
-            day_name = f"Day {i - today_idx}"
+    if today_idx is not None:
+        for i in range(today_idx, min(today_idx + 5, len(daily_time))):
+            dt = _parse_iso(daily_time[i])
+            offset = i - today_idx
+            day_name = "Today" if offset == 0 else ("Tomorrow" if offset == 1
+                                                    else (dt.strftime("%a") if dt else f"+{offset}d"))
+            code = daily_codes[i] if i < len(daily_codes) else None
+            cond, ic = WMO_WEATHER_MAP.get(code, (None, None))
+            forecast_5d.append({
+                "day": day_name,
+                "date": daily_time[i],
+                "is_forecast": offset > 0,
+                "condition": cond, "icon": ic,
+                "temp_max": daily_max[i] if i < len(daily_max) else None,
+                "temp_min": daily_min[i] if i < len(daily_min) else None,
+                "rainfall_mm": (round(float(daily_precip[i]), 1)
+                                if i < len(daily_precip) and daily_precip[i] is not None else None),
+            })
 
-        code = daily_codes[i] if i < len(daily_codes) and daily_codes[i] is not None else 1
-        cond, ic = WMO_WEATHER_MAP.get(code, ("Partly Cloudy", "CloudSun"))
-        t_max = round(daily_max[i]) if i < len(daily_max) and daily_max[i] is not None else None
-        t_min = round(daily_min[i]) if i < len(daily_min) and daily_min[i] is not None else None
-        p_sum = round(daily_precip[i], 1) if i < len(daily_precip) and daily_precip[i] is not None else 0.0
+    observed_at_utc = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    tier = freshness_tier(SOURCE_KEY, observed_at_utc)
 
-        forecast_5d.append({
-            "day": day_name,
-            "date": dt_str,
-            "condition": cond,
-            "icon": ic,
-            "temp_max": t_max,
-            "temp_min": t_min,
-            "rainfall_mm": p_sum
-        })
+    # A partial 24 h window is real but incomplete -> DEGRADED, not silently filled.
+    quality = "GOOD" if hours_counted >= 24 else ("DEGRADED" if hours_counted > 0 else "SUSPECT")
 
-    cumulative_7d = sum(d["rainfall_mm"] for d in rainfall_trend_7d if d["rainfall_mm"] is not None)
+    provenance = Provenance(
+        source="Open-Meteo",
+        dataset_product_id=PRODUCT_ID,
+        observed_at=observed_at_utc.isoformat(),
+        received_at=received_at.isoformat(),
+        processed_at=utcnow().isoformat(),
+        spatial_resolution="~11 km (ground model, not satellite)",
+        temporal_resolution="hourly",
+        licence="Open-Meteo free tier, non-commercial",
+        quality_flag=quality,
+    )
 
     return {
-        "status": "FRESH",
-        "temperature": round(temp, 1) if temp is not None else None,
-        "humidity": round(humidity) if humidity is not None else None,
-        "wind_speed": round(wind_speed, 1) if wind_speed is not None else None,
-        "rainfall_1h": round(rainfall_1h, 1) if rainfall_1h is not None else 0.0,
-        "rainfall_24h": round(rain_24h, 1) if rain_24h is not None else 0.0,
-        "rainfall_7d_cumulative": round(cumulative_7d, 1),
+        "data_status": {
+            "status": tier,
+            "source": SOURCE_KEY,
+            "liveness": liveness(SOURCE_KEY),
+            "observed_at": observed_at_utc.isoformat(),
+            "provenance": provenance.__dict__,
+        },
+        "status": tier,
+        "source": "Open-Meteo",
+        "source_note": "Ground forecast model, cross-check only. Not a satellite source.",
+        "observed": {
+            "temperature": current.get("temperature_2m"),
+            "humidity": current.get("relative_humidity_2m"),
+            "wind_speed": current.get("wind_speed_10m"),
+            "rainfall_1h": current.get("precipitation"),
+            "rainfall_24h": rain_24h,
+            "rainfall_24h_hours_counted": hours_counted,
+            "rainfall_7d_cumulative": rain_7d,
+            "weather_code": wmo_code,
+            "condition_text": condition_text,
+            "observed_at": observed_at_utc.isoformat(),
+        },
+        "forecast": {
+            "issued_at": received_at.isoformat(),
+            "days": [f for f in forecast_5d if f["is_forecast"]],
+        },
+        # Legacy flat keys, observed values only.
+        "temperature": current.get("temperature_2m"),
+        "humidity": current.get("relative_humidity_2m"),
+        "wind_speed": current.get("wind_speed_10m"),
+        "rainfall_1h": current.get("precipitation"),
+        "rainfall_24h": rain_24h,
+        "rainfall_7d_cumulative": rain_7d,
         "weather_code": wmo_code,
         "condition_text": condition_text,
         "icon_name": icon_name,
         "rainfall_trend_7d": rainfall_trend_7d,
         "forecast_5d": forecast_5d,
-        "source": "Open-Meteo (Non-Commercial / Free Tier)",
-        "is_sample_data": False,
-        "quality_flag": "NOMINAL",
-        "last_updated": current.get("time", datetime.utcnow().isoformat())
+        "last_updated": observed_at_utc.isoformat(),
     }
-
-def get_no_data_weather(lat: float, lon: float, error_msg: str = "Service Offline") -> Dict[str, Any]:
-    """
-    Returns structured NO DATA payload when live weather source is unreachable.
-    Never fabricates or substitutes numerical observations.
-    """
-    return {
-        "status": "OFFLINE",
-        "error": error_msg,
-        "temperature": None,
-        "humidity": None,
-        "wind_speed": None,
-        "rainfall_1h": None,
-        "rainfall_24h": None,
-        "rainfall_7d_cumulative": None,
-        "weather_code": None,
-        "condition_text": "NO DATA / OFFLINE",
-        "icon_name": "CloudOff",
-        "rainfall_trend_7d": [],
-        "forecast_5d": [],
-        "source": "Open-Meteo",
-        "is_sample_data": False,
-        "quality_flag": "UNAVAILABLE",
-        "last_updated": None
-    }
-
-def get_fallback_weather(lat: float, lon: float) -> Dict[str, Any]:
-    """
-    Backward-compatible alias for get_no_data_weather.
-    """
-    return get_no_data_weather(lat, lon, "Fallback triggered - no cached observation available")

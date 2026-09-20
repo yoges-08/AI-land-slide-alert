@@ -1,3 +1,23 @@
+"""QUARANTINED TRAINING SCRIPT — confirmed defect 6.
+
+This script generates its own training data and then computes the label from a
+hand-weighted sigmoid of those same features. The resulting model learns to
+invert an arithmetic expression; its outputs are not probabilities of observed
+landslides and were never validated against a real event.
+
+It is kept because M6 reuses its preprocessing and SHAP wiring. It must not be
+re-run to produce a model presented as predictive.
+
+M0 fixed two defects inside it:
+  - best-model selection was hardcoded to XGBoost with the comment "typically
+    achieves best generalization", while the script's own metrics showed
+    XGBoost worst of the three on every measure (acc 0.7747 vs 0.7920 for
+    logistic regression; ROC-AUC 0.8327 vs 0.8456). Selection is now driven by
+    the measured metric.
+  - the train/test split was random over synthetic rows. M6 requires
+    time-based splits; a flag is recorded in the metadata so no one mistakes
+    this for a temporally honest evaluation.
+"""
 import json
 import os
 from pathlib import Path
@@ -208,14 +228,23 @@ def train_and_evaluate():
         fitted_models[name] = model
         print(f"  {name} -> Accuracy: {acc:.4f} | F1: {f1:.4f} | ROC-AUC: {auc:.4f}")
 
-    # Best model selection (XGBoost typically achieves best generalization & native SHAP support)
-    best_model_name = "XGBoost Classifier"
+    # Selection is measured, not assumed. ROC-AUC is the ranking metric.
+    SELECTION_METRIC = "roc_auc"
+    best_model_name = max(results, key=lambda name: results[name][SELECTION_METRIC])
     best_model = fitted_models[best_model_name]
+    print(f"\nSelected by {SELECTION_METRIC}: {best_model_name} "
+          f"({results[best_model_name][SELECTION_METRIC]})")
+    if not hasattr(best_model, "feature_importances_"):
+        print("Note: selected model has no feature_importances_; skipping importance export.")
 
-    # Calculate Feature Importances for XGBoost
-    raw_importances = best_model.feature_importances_
-    importance_dict = {name: round(float(imp), 4) for name, imp in zip(all_feature_names, raw_importances)}
-    sorted_importances = dict(sorted(importance_dict.items(), key=lambda item: item[1], reverse=True)[:15])
+    if hasattr(best_model, "feature_importances_"):
+        raw_importances = best_model.feature_importances_
+        importance_dict = {name: round(float(imp), 4)
+                           for name, imp in zip(all_feature_names, raw_importances)}
+        sorted_importances = dict(sorted(importance_dict.items(),
+                                         key=lambda item: item[1], reverse=True)[:15])
+    else:
+        sorted_importances = {}
 
     # Train Flood Model
     print("\nTraining Multi-Hazard Flood Model...")
@@ -245,6 +274,12 @@ def train_and_evaluate():
         "model_comparison": results,
         "top_feature_importances": sorted_importances,
         "flood_metrics": flood_metrics,
+        "selection_metric": SELECTION_METRIC,
+        "calibration": "UNCALIBRATED",
+        "training_data": "SYNTHETIC — labels computed by formula from the features",
+        "split_strategy": "RANDOM — not time-based; M6 requires time-based splits",
+        "validated_against_observed_events": False,
+        "output_units": "unitless hazard index on [0,1], NOT a probability",
         "prototype_disclaimer": "LANDSAFE-NER is a B.Tech AI & Data Science academic prototype. It is NOT an official government disaster-warning system. Risk levels are based on prototype thresholds for demonstration purposes only. Do not use for real-world emergency decisions."
     }
 
