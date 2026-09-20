@@ -43,6 +43,7 @@ from backend.app.services.weather_service import fetch_live_weather
 router = APIRouter()
 
 DATA_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "ne_india_locations.json"
+GEO_DATA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "data" / "geo_data.json"
 LOCATIONS_CACHE: List[Dict[str, Any]] = []
 
 # Fields produced by random.uniform / random.randint in seed_locations.py.
@@ -65,16 +66,55 @@ def _classify_provenance(record: dict) -> str:
 def get_all_cached_locations() -> List[Dict[str, Any]]:
     global LOCATIONS_CACHE
     if not LOCATIONS_CACHE:
-        if not DATA_PATH.exists():
-            return []
-        with open(DATA_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f)
         cleaned = []
-        for rec in raw:
-            item = {k: v for k, v in rec.items() if k not in FABRICATED_FIELDS}
-            item["provenance"] = _classify_provenance(rec)
-            item["data_status"] = "NO_DATA"
-            cleaned.append(item)
+        seen_districts = set()
+
+        # 1. Load field monitoring locations from ne_india_locations.json
+        if DATA_PATH.exists():
+            with open(DATA_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            for rec in raw:
+                item = {k: v for k, v in rec.items() if k not in FABRICATED_FIELDS}
+                item["provenance"] = _classify_provenance(rec)
+                item["data_status"] = "NO_DATA"
+                cleaned.append(item)
+                key = (item.get("state", "").lower(), item.get("district", "").lower())
+                seen_districts.add(key)
+
+        # 2. Fold in all 726 Indian districts from geo_data.json for complete All-India coverage
+        if GEO_DATA_PATH.exists():
+            with open(GEO_DATA_PATH, "r", encoding="utf-8") as f:
+                geo = json.load(f)
+            districts = geo.get("districts", [])
+            current_id = max((l["id"] for l in cleaned), default=0) + 1
+            for d in districts:
+                st = d.get("s", "Unknown")
+                dist_name = d.get("n", "Unknown")
+                key = (st.lower(), dist_name.lower())
+                if key not in seen_districts:
+                    lat = float(d["ll"][0]) if d.get("ll") else 20.0
+                    lon = float(d["ll"][1]) if d.get("ll") else 78.0
+                    tier = d.get("tier", 1)
+                    item = {
+                        "id": current_id,
+                        "name": dist_name,
+                        "district": dist_name,
+                        "state": st,
+                        "latitude": lat,
+                        "longitude": lon,
+                        "elevation": float(d.get("e", 500)),
+                        "slope": float(d.get("sl", 15.0)),
+                        "soil_type": d.get("soil", "Clay Loam"),
+                        "geology": d.get("geo", "Sedimentary"),
+                        "coverage_tier": "FULL_HAZARD_MONITORING" if tier == 1 else "SCREENING" if tier == 2 else "PLAINS",
+                        "has_prediction": tier == 1,
+                        "provenance": "CURATED_SEED",
+                        "data_status": "NO_DATA"
+                    }
+                    cleaned.append(item)
+                    seen_districts.add(key)
+                    current_id += 1
+
         LOCATIONS_CACHE = cleaned
     return LOCATIONS_CACHE
 
