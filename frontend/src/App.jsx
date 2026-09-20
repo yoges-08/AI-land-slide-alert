@@ -117,17 +117,18 @@ export default function App() {
   const availableDistricts = activeStateObj ? activeStateObj.districts : [];
 
   // Filter locations based on cascade controls
-  const filteredLocations = locations.filter((l) => {
+  const filteredLocations = (locations || []).filter((l) => {
+    if (!l) return false;
     if (selectedState && l.state !== selectedState) return false;
     if (selectedDistrict && l.district !== selectedDistrict) return false;
-    if (selectedRiskTier && !l.risk_category.toLowerCase().includes(selectedRiskTier.toLowerCase())) return false;
+    if (selectedRiskTier && !(l.risk_category || '').toLowerCase().includes(selectedRiskTier.toLowerCase())) return false;
     return true;
   });
 
   // Counts for top cards
-  const highCount = locations.filter((l) => l.risk_category === 'High').length || 24;
-  const modCount = locations.filter((l) => l.risk_category === 'Moderate').length || 62;
-  const lowCount = locations.filter((l) => l.risk_category.includes('Low') || l.risk_category.includes('Plain')).length || 218;
+  const highCount = (locations || []).filter((l) => (l?.risk_category || '') === 'High').length || 24;
+  const modCount = (locations || []).filter((l) => (l?.risk_category || '') === 'Moderate').length || 62;
+  const lowCount = (locations || []).filter((l) => (l?.risk_category || '').includes('Low') || (l?.risk_category || '').includes('Plain')).length || 218;
 
   return (
     <div className="flex min-h-screen bg-[#f1f5f9] text-slate-800">

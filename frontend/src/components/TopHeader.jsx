@@ -78,7 +78,7 @@ export default function TopHeader({
                         : 'bg-emerald-50 text-emerald-600 border border-emerald-200'
                     }`}
                   >
-                    {loc.risk_category}
+                    {loc.risk_category || 'Monitored'}
                   </span>
                   <span className="text-[11px] text-slate-400">{loc.elevation}m</span>
                 </div>
