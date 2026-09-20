@@ -157,3 +157,22 @@ def test_insert_risk_assessment_and_alert(db_session: Session):
     assert retrieved_alert is not None
     assert retrieved_alert.severity == "WARNING"
     assert retrieved_alert.message_hi is not None
+
+
+def test_district_coordinates_and_imagery(db_session: Session):
+    districts = db_session.query(District).all()
+    assert len(districts) == 788
+    for d in districts:
+        assert 6.0 <= d.latitude <= 38.0, f"District {d.name} latitude {d.latitude} out of Indian bounds"
+        assert 68.0 <= d.longitude <= 98.0, f"District {d.name} longitude {d.longitude} out of Indian bounds"
+
+    thanjavur = db_session.query(District).filter(District.name == "Thanjavur").first()
+    assert thanjavur is not None
+    assert 10.70 <= thanjavur.latitude <= 10.85
+    assert 79.05 <= thanjavur.longitude <= 79.20
+
+    wayanad = db_session.query(District).filter(District.name == "Wayanad").first()
+    assert wayanad is not None
+    assert 11.60 <= wayanad.latitude <= 11.75
+    assert 76.05 <= wayanad.longitude <= 76.20
+

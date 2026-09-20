@@ -78,6 +78,8 @@ def get_all_cached_locations() -> List[Dict[str, Any]]:
                 item = {k: v for k, v in rec.items() if k not in FABRICATED_FIELDS}
                 item["provenance"] = _classify_provenance(rec)
                 item["data_status"] = "NO_DATA"
+                if "image_url" in rec:
+                    item["image_url"] = rec["image_url"]
                 cleaned.append(item)
                 key = (item.get("state", "").lower(), item.get("district", "").lower())
                 seen_districts.add(key)
@@ -117,6 +119,7 @@ def get_all_cached_locations() -> List[Dict[str, Any]]:
                         "has_prediction": tier == 1,
                         "geometry_status": geom_status,
                         "terrain_provenance": "ESTIMATED / HEURISTIC — pending Copernicus GLO-30 DEM ingestion (see ARCHITECTURE.md)",
+                        "image_url": d.get("image_url"),
                         "provenance": "CURATED_SEED",
                         "data_status": "NO_DATA"
                     }

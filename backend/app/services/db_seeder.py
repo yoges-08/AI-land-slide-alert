@@ -236,6 +236,11 @@ def seed_database(db: Session = None):
                     )
                     db.add(dist)
                 else:
+                    existing_district.name = d_name
+                    existing_district.latitude = float(ll[0])
+                    existing_district.longitude = float(ll[1])
+                    existing_district.mean_elevation_m = elev
+                    existing_district.mean_slope_deg = slope
                     existing_district.lgd_code = lgd_code
                     existing_district.lgd_state_code = s_code
                     existing_district.geometry_status = geom_status

@@ -65,6 +65,10 @@ export default function LocationDetails({
           <img
             src={imageSrc}
             alt={name}
+            onError={(e) => {
+              e.currentTarget.onerror = null;
+              e.currentTarget.src = 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=500&auto=format&fit=crop&q=60';
+            }}
             className="w-full h-24 object-cover brightness-[0.95]"
           />
           <button
