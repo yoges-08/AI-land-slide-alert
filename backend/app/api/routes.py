@@ -43,6 +43,7 @@ from backend.app.services.weather_service import fetch_live_weather
 router = APIRouter()
 
 DATA_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "ne_india_locations.json"
+LGD_DATA_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "lgd_administrative_units.json"
 GEO_DATA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "data" / "geo_data.json"
 LOCATIONS_CACHE: List[Dict[str, Any]] = []
 
@@ -81,33 +82,41 @@ def get_all_cached_locations() -> List[Dict[str, Any]]:
                 key = (item.get("state", "").lower(), item.get("district", "").lower())
                 seen_districts.add(key)
 
-        # 2. Fold in all 726 Indian districts from geo_data.json for complete All-India coverage
-        if GEO_DATA_PATH.exists():
-            with open(GEO_DATA_PATH, "r", encoding="utf-8") as f:
-                geo = json.load(f)
-            districts = geo.get("districts", [])
+        # 2. Fold in all 788 authoritative LGD districts for complete All-India coverage
+        source_path = LGD_DATA_PATH if LGD_DATA_PATH.exists() else GEO_DATA_PATH
+        if source_path.exists():
+            with open(source_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            districts = data.get("districts", [])
             current_id = max((l["id"] for l in cleaned), default=0) + 1
             for d in districts:
-                st = d.get("s", "Unknown")
-                dist_name = d.get("n", "Unknown")
+                st = d.get("state") or d.get("s", "Unknown")
+                dist_name = d.get("name") or d.get("n", "Unknown")
                 key = (st.lower(), dist_name.lower())
                 if key not in seen_districts:
-                    lat = float(d["ll"][0]) if d.get("ll") else 20.0
-                    lon = float(d["ll"][1]) if d.get("ll") else 78.0
+                    lat = float(d["latitude"]) if "latitude" in d else (float(d["ll"][0]) if d.get("ll") else 20.0)
+                    lon = float(d["longitude"]) if "longitude" in d else (float(d["ll"][1]) if d.get("ll") else 78.0)
                     tier = d.get("tier", 1)
+                    elev = float(d.get("elevation_m") if d.get("elevation_m") is not None else d.get("e", 500))
+                    slope = float(d.get("slope_deg") if d.get("slope_deg") is not None else d.get("sl", 15.0))
+                    geom_status = d.get("geometry_status") or d.get("status", "AVAILABLE")
                     item = {
                         "id": current_id,
                         "name": dist_name,
                         "district": dist_name,
                         "state": st,
+                        "lgd_code": d.get("lgd_code"),
+                        "lgd_state_code": d.get("lgd_state_code"),
                         "latitude": lat,
                         "longitude": lon,
-                        "elevation": float(d.get("e", 500)),
-                        "slope": float(d.get("sl", 15.0)),
+                        "elevation": elev,
+                        "slope": slope,
                         "soil_type": d.get("soil", "Clay Loam"),
                         "geology": d.get("geo", "Sedimentary"),
                         "coverage_tier": "FULL_HAZARD_MONITORING" if tier == 1 else "SCREENING" if tier == 2 else "PLAINS",
                         "has_prediction": tier == 1,
+                        "geometry_status": geom_status,
+                        "terrain_provenance": "ESTIMATED / HEURISTIC — pending Copernicus GLO-30 DEM ingestion (see ARCHITECTURE.md)",
                         "provenance": "CURATED_SEED",
                         "data_status": "NO_DATA"
                     }

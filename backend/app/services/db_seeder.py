@@ -15,6 +15,7 @@ from backend.app.models.db_models import (
 logger = logging.getLogger(__name__)
 
 GEO_DATA_PATH = Path(__file__).resolve().parents[3] / "frontend" / "data" / "geo_data.json"
+LGD_DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "lgd_administrative_units.json"
 
 DATA_SOURCES_INITIAL = [
     {
@@ -142,39 +143,56 @@ def seed_database(db: Session = None):
                 m = ModelVersion(**model_data)
                 db.add(m)
 
-        # 3. Seed States & 726 Districts from geo_data.json
-        if GEO_DATA_PATH.exists():
-            with open(GEO_DATA_PATH, "r", encoding="utf-8") as f:
-                geo = json.load(f)
+        # 3. Seed States & 788 Districts from Authoritative LGD Dataset
+        source_path = LGD_DATA_PATH if LGD_DATA_PATH.exists() else GEO_DATA_PATH
+        if source_path.exists():
+            with open(source_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-            states_raw = geo.get("states", {})
             states_dict = {}
-            if isinstance(states_raw, dict):
-                for s_name, s_meta in states_raw.items():
-                    state_obj = db.query(State).filter(State.name == s_name).first()
-                    if not state_obj:
-                        iso_val = s_meta.get("iso") if isinstance(s_meta, dict) else None
-                        state_obj = State(name=s_name, iso_code=iso_val)
-                        db.add(state_obj)
-                        db.flush()
-                    states_dict[s_name] = state_obj.id
-            elif isinstance(states_raw, list):
-                for s_info in states_raw:
-                    s_name = s_info.get("name") if isinstance(s_info, dict) else str(s_info)
+
+            # Process States (from LGD dataset list or dict)
+            states_list = data.get("states", [])
+            if isinstance(states_list, list):
+                for s_info in states_list:
+                    s_name = s_info.get("name")
                     if not s_name:
                         continue
                     state_obj = db.query(State).filter(State.name == s_name).first()
                     if not state_obj:
-                        iso_val = s_info.get("iso") if isinstance(s_info, dict) else None
-                        state_obj = State(name=s_name, iso_code=iso_val)
+                        state_obj = State(
+                            name=s_name,
+                            lgd_code=s_info.get("lgd_code"),
+                            iso_code=s_info.get("iso"),
+                            state_type=s_info.get("type", "STATE")
+                        )
+                        db.add(state_obj)
+                        db.flush()
+                    else:
+                        if s_info.get("lgd_code"):
+                            state_obj.lgd_code = s_info["lgd_code"]
+                        if s_info.get("type"):
+                            state_obj.state_type = s_info["type"]
+                    states_dict[s_name] = state_obj.id
+            elif isinstance(states_list, dict):
+                for s_name, s_meta in states_list.items():
+                    state_obj = db.query(State).filter(State.name == s_name).first()
+                    if not state_obj:
+                        iso_val = s_meta.get("iso") if isinstance(s_meta, dict) else None
+                        lgd_c = s_meta.get("lgd_code") if isinstance(s_meta, dict) else None
+                        st_type = s_meta.get("type", "STATE") if isinstance(s_meta, dict) else "STATE"
+                        state_obj = State(name=s_name, iso_code=iso_val, lgd_code=lgd_c, state_type=st_type)
                         db.add(state_obj)
                         db.flush()
                     states_dict[s_name] = state_obj.id
 
-            for idx, d in enumerate(geo.get("districts", [])):
-                d_name = d.get("n")
-                s_name = d.get("s")
+            # Process Districts
+            districts_list = data.get("districts", [])
+            for idx, d in enumerate(districts_list):
+                d_name = d.get("name") or d.get("n")
+                s_name = d.get("state") or d.get("s")
                 state_id = states_dict.get(s_name)
+
                 if not state_id:
                     state_obj = db.query(State).filter(State.name == s_name).first()
                     if not state_obj:
@@ -185,26 +203,43 @@ def seed_database(db: Session = None):
                     state_id = state_obj.id
 
                 d_id = idx + 1
+                lgd_code = d.get("lgd_code")
                 existing_district = db.query(District).filter(District.id == d_id).first()
+
+                ll = d.get("ll") or [d.get("latitude", 20.0), d.get("longitude", 78.0)]
+                elev = float(d.get("elevation_m") if d.get("elevation_m") is not None else d.get("e", 500))
+                slope = float(d.get("slope_deg") if d.get("slope_deg") is not None else d.get("sl", 10))
+                p_zone = d.get("physiography_zone") or d.get("z", "plateau")
+                geom_status = d.get("geometry_status") or d.get("status", "AVAILABLE")
+                s_code = d.get("lgd_state_code")
+                sz = d.get("is_1893_seismic_zone") or (5 if s_name in ["Assam", "Nagaland", "Manipur", "Mizoram", "Tripura", "Arunachal Pradesh", "Meghalaya"] else (4 if s_name in ["Sikkim", "Uttarakhand", "Himachal Pradesh", "Jammu and Kashmir", "Ladakh"] else 3))
+
                 if not existing_district:
-                    ll = d.get("ll", [20.0, 78.0])
-                    sz = 5 if s_name in ["Assam", "Nagaland", "Manipur", "Mizoram", "Tripura", "Arunachal Pradesh", "Meghalaya"] else (4 if s_name in ["Sikkim", "Uttarakhand", "Himachal Pradesh", "Jammu and Kashmir", "Ladakh"] else 3)
                     dist = District(
                         id=d_id,
                         state_id=state_id,
                         name=d_name,
+                        lgd_code=lgd_code,
+                        lgd_state_code=s_code,
                         tier=d.get("tier", 1),
-                        physiography_zone=d.get("z", "plateau"),
-                        mean_elevation_m=float(d.get("e", 500)),
-                        mean_slope_deg=float(d.get("sl", 10)),
-                        dominant_lithology=d.get("z", "plateau"),
+                        physiography_zone=p_zone,
+                        mean_elevation_m=elev,
+                        mean_slope_deg=slope,
+                        dominant_lithology=p_zone,
                         is_1893_seismic_zone=sz,
                         latitude=float(ll[0]),
                         longitude=float(ll[1]),
-                        boundary_source="Survey of India / OpenData",
+                        geometry_status=geom_status,
+                        terrain_provenance="ESTIMATED / HEURISTIC — pending Copernicus GLO-30 DEM ingestion (see ARCHITECTURE.md)",
+                        boundary_source="Local Government Directory (LGD) / Survey of India",
                         licence="Open Government Data (OGD) India"
                     )
                     db.add(dist)
+                else:
+                    existing_district.lgd_code = lgd_code
+                    existing_district.lgd_state_code = s_code
+                    existing_district.geometry_status = geom_status
+                    existing_district.terrain_provenance = "ESTIMATED / HEURISTIC — pending Copernicus GLO-30 DEM ingestion (see ARCHITECTURE.md)"
 
         db.commit()
         logger.info("[Database] Seeding completed successfully.")

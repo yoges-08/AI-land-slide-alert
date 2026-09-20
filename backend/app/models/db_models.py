@@ -36,14 +36,16 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 # ---------------------------------------------------------------------------
-# 1. Administrative Boundaries & Terrain Registry
+# 1. Administrative Boundaries & Terrain Registry (Authoritative LGD - MoPR)
 # ---------------------------------------------------------------------------
 class State(Base):
     __tablename__ = "states"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), unique=True, nullable=False, index=True)
+    lgd_code = Column(Integer, unique=True, nullable=True, index=True)  # Official LGD State Code
     iso_code = Column(String(10), unique=True, nullable=True)
+    state_type = Column(String(20), nullable=False, default="STATE")  # "STATE" or "UNION_TERRITORY"
     geom = Column(Geometry("MULTIPOLYGON", srid=4326), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
@@ -56,7 +58,9 @@ class District(Base):
     id = Column(Integer, primary_key=True, index=True)
     state_id = Column(Integer, ForeignKey("states.id", ondelete="RESTRICT"), nullable=False, index=True)
     name = Column(String(100), nullable=False, index=True)
-    census_code = Column(String(20), nullable=True, index=True)
+    lgd_code = Column(Integer, nullable=True, index=True)  # Official LGD District Code
+    lgd_state_code = Column(Integer, nullable=True, index=True)
+    census_2011_code = Column(String(20), nullable=True, index=True)
     tier = Column(SmallInteger, nullable=False, default=1)  # 1: Full Monitoring, 2: Screening, 3: Plains
     physiography_zone = Column(String(50), nullable=False, default="ne_hills")
     mean_elevation_m = Column(Float, nullable=False, default=1000.0)
@@ -65,9 +69,16 @@ class District(Base):
     is_1893_seismic_zone = Column(SmallInteger, nullable=False, default=5)  # Zone 2, 3, 4, or 5
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
+    geometry_status = Column(String(30), nullable=False, default="AVAILABLE")  # AVAILABLE or PENDING_BOUNDARY
+    terrain_provenance = Column(
+        String(150),
+        nullable=False,
+        default="ESTIMATED / HEURISTIC — pending Copernicus GLO-30 DEM ingestion (see ARCHITECTURE.md)"
+    )
+    headquarters = Column(String(100), nullable=True)
     geom = Column(Geometry("MULTIPOLYGON", srid=4326), nullable=True)
     centroid = Column(Geometry("POINT", srid=4326), nullable=True)
-    boundary_source = Column(String(100), default="Survey of India / OpenData")
+    boundary_source = Column(String(100), default="Local Government Directory (LGD) / Survey of India")
     licence = Column(String(100), default="Open Government Data (OGD) India")
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
@@ -83,6 +94,7 @@ class District(Base):
     __table_args__ = (
         Index("idx_district_state_name", "state_id", "name"),
         Index("idx_district_tier", "tier"),
+        Index("idx_district_lgd_code", "lgd_code"),
     )
 
 

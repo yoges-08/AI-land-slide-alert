@@ -21,20 +21,38 @@ def db_session():
 
 def test_states_seeded(db_session: Session):
     state_count = db_session.query(State).count()
-    assert state_count >= 28, f"Expected at least 28 states, got {state_count}"
+    assert state_count == 36, f"Expected exactly 36 States/UTs, got {state_count}"
+
+    states = db_session.query(State).all()
+    assert all(s.lgd_code is not None for s in states), "All states must declare an official LGD code"
+    assert all(s.state_type in ["STATE", "UNION_TERRITORY"] for s in states)
     
+    state_types = [s.state_type for s in states]
+    assert state_types.count("STATE") == 28, "Expected 28 States"
+    assert state_types.count("UNION_TERRITORY") == 8, "Expected 8 Union Territories"
+
     sikkim = db_session.query(State).filter(State.name == "Sikkim").first()
     assert sikkim is not None
+    assert sikkim.lgd_code == 11
     assert sikkim.districts is not None
-    assert len(sikkim.districts) > 0
+    assert len(sikkim.districts) == 6
 
-def test_all_726_districts_seeded(db_session: Session):
+
+def test_all_788_lgd_districts_seeded(db_session: Session):
     district_count = db_session.query(District).count()
-    assert district_count == 726, f"Expected exactly 726 districts, got {district_count}"
+    assert district_count == 788, f"Expected exactly 788 LGD districts, got {district_count}"
     
+    districts = db_session.query(District).all()
+    # Check LGD traceability and zero-fabrication geometry statuses
+    assert all(d.lgd_code is not None for d in districts), "Every district must carry an official LGD district code"
+    assert all(d.lgd_state_code is not None for d in districts), "Every district must carry a parent LGD state code"
+    assert all(d.geometry_status in ["AVAILABLE", "PENDING_BOUNDARY"] for d in districts)
+    assert all("pending Copernicus GLO-30 DEM" in d.terrain_provenance for d in districts)
+
     # Check sample district attributes
     aizawl = db_session.query(District).filter(District.name == "Aizawl").first()
     assert aizawl is not None
+    assert aizawl.lgd_code == 259
     assert aizawl.tier == 1
     assert aizawl.physiography_zone == "ne_hills"
     assert aizawl.is_1893_seismic_zone == 5
