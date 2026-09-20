@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from backend.app.api.routes import router as api_router
 from backend.app.core.config import ADVISORY_NOTICE, settings
 from backend.app.core.mode import DEMO_LABEL, is_demo
+from backend.app.ingestion.scheduler import ingestion_scheduler
 from backend.app.services.ml_service import load_ml_assets
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,13 @@ async def lifespan(app: FastAPI):
         logger.warning("[LANDSAFE-NER] DEMO MODE — every response carries %s", DEMO_LABEL)
     load_ml_assets()          # real infrastructure, kept (defect 6)
     logger.info("[LANDSAFE-NER] model and SHAP explainer loaded (UNCALIBRATED, synthetic training data)")
+    if settings.SCHEDULER_AUTOSTART:
+        ingestion_scheduler.start()
+        logger.info("[LANDSAFE-NER] Ingestion scheduler started")
     yield
+    if ingestion_scheduler.is_running:
+        ingestion_scheduler.shutdown()
+        logger.info("[LANDSAFE-NER] Ingestion scheduler stopped")
     logger.info("[LANDSAFE-NER] shutting down")
 
 

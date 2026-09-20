@@ -17,11 +17,17 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from backend.app.core.config import ADVISORY_NOTICE, settings
+from backend.app.core.database import get_db
 from backend.app.core.freshness import no_data, utcnow
 from backend.app.core.mode import DEMO_LABEL, is_demo
+from backend.app.ingestion.rate_limiter import get_rate_limiter
+from backend.app.ingestion.registry import source_registry
+from backend.app.ingestion.scheduler import ingestion_scheduler
+from backend.app.models.db_models import DataSource, SourceHealth
 from backend.app.models.schema import (
     LocationResponse, PredictRequest, PredictResponse,
     SimulationRequest, SimulationResponse,
@@ -378,3 +384,80 @@ async def export_risk_report(loc_id: int):
             "attribution": hazard.get("top_factors", {}),
         },
     })
+
+
+@router.get("/sources")
+async def list_data_sources(db: Session = Depends(get_db)):
+    """List all registered data sources with current health and verification state."""
+    sources_in_db = db.query(DataSource).all()
+    results = []
+    for src in sources_in_db:
+        health = src.health
+        rate_limiter = get_rate_limiter(src.id)
+        is_verified = source_registry.is_verified(src.id)
+        results.append({
+            "id": src.id,
+            "name": src.name,
+            "provider": src.provider,
+            "cadence_minutes": src.cadence_minutes,
+            "licence": src.licence,
+            "api_endpoint": src.api_endpoint,
+            "is_active": src.is_active,
+            "is_verified": is_verified,
+            "health": {
+                "status": health.status if health else "UNKNOWN",
+                "last_successful_fetch": health.last_successful_fetch.isoformat() if health and health.last_successful_fetch else None,
+                "last_attempt_status": health.last_attempt_status if health else None,
+                "consecutive_failures": health.consecutive_failures if health else 0,
+                "average_latency_ms": health.average_latency_ms if health else 0.0,
+                "updated_at": health.updated_at.isoformat() if health and health.updated_at else None,
+            },
+            "rate_limit": rate_limiter.get_status()
+        })
+    return _envelope({
+        "total_sources": len(results),
+        "sources": results
+    })
+
+
+@router.get("/sources/{source_id}/health")
+async def get_source_health(source_id: str, db: Session = Depends(get_db)):
+    """Get detailed health and quota status for a single source."""
+    src = db.query(DataSource).filter(DataSource.id.ilike(source_id)).first()
+    if not src:
+        raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found.")
+
+    health = src.health
+    rate_limiter = get_rate_limiter(src.id)
+    is_verified = source_registry.is_verified(src.id)
+    return _envelope({
+        "id": src.id,
+        "name": src.name,
+        "provider": src.provider,
+        "cadence_minutes": src.cadence_minutes,
+        "licence": src.licence,
+        "is_active": src.is_active,
+        "is_verified": is_verified,
+        "health": {
+            "status": health.status if health else "UNKNOWN",
+            "last_successful_fetch": health.last_successful_fetch.isoformat() if health and health.last_successful_fetch else None,
+            "last_attempt_status": health.last_attempt_status if health else None,
+            "consecutive_failures": health.consecutive_failures if health else 0,
+            "average_latency_ms": health.average_latency_ms if health else 0.0,
+            "updated_at": health.updated_at.isoformat() if health and health.updated_at else None,
+        },
+        "rate_limit": rate_limiter.get_status()
+    })
+
+
+@router.post("/sources/{source_id}/trigger")
+async def trigger_source_ingestion(source_id: str):
+    """Trigger manual on-demand ingestion cycle for a source."""
+    try:
+        result = await ingestion_scheduler.trigger_now(source_id)
+        return _envelope(result)
+    except ValueError as ex:
+        raise HTTPException(status_code=404, detail=str(ex))
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
+

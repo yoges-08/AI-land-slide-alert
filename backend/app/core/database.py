@@ -17,7 +17,7 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+from backend.app.models.db_models import Base
 
 def init_db():
     """Create tables if they do not exist."""
