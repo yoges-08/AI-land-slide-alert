@@ -32,9 +32,7 @@ class Settings(BaseSettings):
     # before the migration lands; no code currently opens a connection.
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./landsafe.db")
 
-    # Comma-separated. Wildcard with credentials is both unsafe and rejected by
-    # browsers, so it is not permitted (see backend/app/main.py).
-    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,https://ai-land-slide-alert.vercel.app"
 
     OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1"
     OPEN_METEO_TIMEOUT_S: float = 15.0

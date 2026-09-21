@@ -45,12 +45,12 @@ app = FastAPI(
 # config/.env. Auth on write endpoints lands in M11.
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-is_wildcard = "*" in settings.cors_origin_list
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
-    allow_credentials=not is_wildcard,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS", "HEAD"],
     allow_headers=["*"],
 )
 
