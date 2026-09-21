@@ -22,19 +22,20 @@ export default function WeatherCard({ weather, locationName = 'Gangtok, Sikkim',
     );
   }
 
-  const temp = weather.temperature ?? 24;
-  const condition = weather.condition_text ?? 'Light Rain';
-  const humidity = weather.humidity ?? 92;
-  const wind = weather.wind_speed ?? 12;
-  const rain1h = weather.rainfall_1h ?? 8.4;
+  const temp = weather.temperature;
+  const condition = weather.condition_text || (weather.status === 'OFFLINE' ? 'Observation Offline' : 'No Observation');
+  const humidity = weather.humidity;
+  const wind = weather.wind_speed;
+  const rain1h = weather.rainfall_1h;
 
   const renderWeatherIcon = () => {
-    const text = condition.toLowerCase();
+    const text = (condition || '').toLowerCase();
     if (text.includes('thunder')) return <CloudLightning className="w-8 h-8 text-amber-500 animate-pulse" />;
     if (text.includes('snow')) return <Snowflake className="w-8 h-8 text-sky-400" />;
     if (text.includes('rain') || text.includes('drizzle')) return <CloudRain className="w-8 h-8 text-blue-500" />;
     if (text.includes('cloud')) return <CloudSun className="w-8 h-8 text-slate-400" />;
-    return <Sun className="w-8 h-8 text-amber-400" />;
+    if (text.includes('clear') || text.includes('sun')) return <Sun className="w-8 h-8 text-amber-400" />;
+    return <Cloud className="w-8 h-8 text-slate-300" />;
   };
 
   return (
@@ -44,7 +45,9 @@ export default function WeatherCard({ weather, locationName = 'Gangtok, Sikkim',
           {renderWeatherIcon()}
           <div>
             <div className="flex items-baseline space-x-1.5">
-              <span className="text-2xl font-bold text-slate-900 leading-none">{temp}°C</span>
+              <span className="text-2xl font-bold text-slate-900 leading-none">
+                {temp != null ? `${temp}°C` : '--'}
+              </span>
             </div>
             <span className="text-xs font-medium text-slate-600 block mt-0.5">{condition}</span>
           </div>

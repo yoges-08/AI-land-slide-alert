@@ -33,8 +33,9 @@ export default function HighRiskTable({ locations = [], onSelectLocation, onView
             </thead>
             <tbody className="divide-y divide-slate-100">
               {highRiskSorted.map((loc) => {
-                const prob = Math.round((loc.risk_probability || 0.5) * 100);
-                const isHigh = loc.risk_category === 'High' || prob >= 70;
+                const rawProb = loc.hazard_index ?? loc.risk_probability;
+                const prob = rawProb != null ? Math.round(rawProb * 100) : null;
+                const isHigh = loc.risk_category === 'High' || (prob != null && prob >= 70);
 
                 return (
                   <tr
@@ -54,12 +55,12 @@ export default function HighRiskTable({ locations = [], onSelectLocation, onView
                           }`}
                         />
                         <span className={isHigh ? 'text-red-600' : 'text-amber-600'}>
-                          {isHigh ? 'High' : 'Moderate'}
+                          {loc.risk_category || (isHigh ? 'High' : 'Moderate')}
                         </span>
                       </span>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900 text-[11px]">
-                      {prob}%
+                      {prob != null ? `${prob}%` : '--'}
                     </td>
                   </tr>
                 );

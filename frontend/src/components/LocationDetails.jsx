@@ -34,26 +34,22 @@ export default function LocationDetails({
     );
   }
 
-  const name = location.name || 'Gangtok';
-  const state = location.state || 'Sikkim';
+  const name = location.name || 'Location';
+  const state = location.state || '';
   const district = location.district || state;
-  const lat = location.latitude ? location.latitude.toFixed(2) : '27.33';
-  const lon = location.longitude ? location.longitude.toFixed(2) : '88.62';
-  const elevation = location.elevation ? location.elevation.toLocaleString() : '1,480';
-  const slope = location.slope ? location.slope.toFixed(0) : '34';
-  const soilType = location.soil_type || 'Loam';
-  const rain24h = liveWeather?.rainfall_24h ?? location.rainfall_24h ?? 142;
-  const hasPrediction = location.has_prediction !== false;
-  const prob = location.risk_probability ? Math.round(location.risk_probability * 100) : 82;
-  const category = location.risk_category || (prob >= 70 ? 'High Risk' : prob >= 30 ? 'Moderate Risk' : 'Low Risk');
-  const floodCategory = location.flood_risk_category || 'Low';
+  const lat = location.latitude ? location.latitude.toFixed(2) : '--';
+  const lon = location.longitude ? location.longitude.toFixed(2) : '--';
+  const elevation = location.elevation != null ? location.elevation.toLocaleString() : '--';
+  const slope = location.slope != null ? location.slope.toFixed(0) : '--';
+  const soilType = location.soil_type || 'Unclassified';
+  const rain24h = liveWeather?.rainfall_24h ?? location.rainfall_24h;
+  const hasPrediction = location.has_prediction !== false && (location.hazard_index != null || location.risk_probability != null);
+  const hazardVal = location.hazard_index ?? location.risk_probability;
+  const prob = hazardVal != null ? Math.round(hazardVal * 100) : null;
+  const category = location.risk_category || (prob != null ? (prob >= 70 ? 'High Risk' : prob >= 30 ? 'Moderate Risk' : 'Low Risk') : 'No Active Assessment');
+  const floodCategory = location.flood_risk_category || 'No Data';
 
-  const factors = location.key_risk_factors || {
-    heavy_rainfall: 92,
-    steep_slope: 78,
-    land_cover_change: 56,
-    historical_landslide: 49
-  };
+  const factors = location.key_risk_factors || null;
 
   const imageSrc = location.image_url || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=500&auto=format&fit=crop&q=60';
 
@@ -96,7 +92,7 @@ export default function LocationDetails({
         </div>
 
         {/* Risk Probability Banner OR Plain District Notice */}
-        {hasPrediction ? (
+        {hasPrediction && prob != null ? (
           <div className="mt-3 bg-red-50/70 border border-red-100 rounded-xl p-3 flex items-center justify-between">
             <div className="flex items-center space-x-2">
               <div className="w-7 h-7 rounded-lg bg-red-500 text-white flex items-center justify-center shadow-xs">
@@ -106,21 +102,21 @@ export default function LocationDetails({
                 <span className="text-xs font-bold text-red-700 block leading-tight">
                   {category.includes('Risk') ? category : `${category} Risk`}
                 </span>
-                <span className="text-[10px] text-red-600/80 font-medium">Prototype Threshold</span>
+                <span className="text-[10px] text-red-600/80 font-medium">Hazard Index</span>
               </div>
             </div>
             <div className="text-right">
               <span className="text-xl font-extrabold text-red-600 leading-none">{prob}%</span>
-              <span className="text-[10px] text-slate-500 block font-medium">Risk Probability</span>
+              <span className="text-[10px] text-slate-500 block font-medium">Calculated Score</span>
             </div>
           </div>
         ) : (
           <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center space-x-2.5">
             <ShieldCheck className="w-6 h-6 text-slate-400 flex-shrink-0" />
             <div>
-              <span className="text-xs font-bold text-slate-700 block">Plain Terrain (Low Hazard Zone)</span>
+              <span className="text-xs font-bold text-slate-700 block">Awaiting Trigger / Observation</span>
               <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
-                Insufficient slope gradient / historical landslide ground-truth for ML trigger prediction.
+                Zero-fabrication policy: Real-time hazard scoring requires confirmed meteorological & satellite feeds.
               </p>
             </div>
           </div>
@@ -138,15 +134,15 @@ export default function LocationDetails({
         <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
           <div className="bg-slate-50/80 p-2.5 rounded-lg border border-slate-100">
             <span className="text-[10px] text-slate-400 block font-medium">Rainfall (24h)</span>
-            <span className="font-bold text-slate-900 text-xs">{rain24h} mm</span>
+            <span className="font-bold text-slate-900 text-xs">{rain24h != null ? `${rain24h} mm` : '--'}</span>
           </div>
           <div className="bg-slate-50/80 p-2.5 rounded-lg border border-slate-100">
             <span className="text-[10px] text-slate-400 block font-medium">Slope</span>
-            <span className="font-bold text-slate-900 text-xs">{slope}°</span>
+            <span className="font-bold text-slate-900 text-xs">{slope !== '--' ? `${slope}°` : '--'}</span>
           </div>
           <div className="bg-slate-50/80 p-2.5 rounded-lg border border-slate-100">
             <span className="text-[10px] text-slate-400 block font-medium">Elevation</span>
-            <span className="font-bold text-slate-900 text-xs">{elevation} m</span>
+            <span className="font-bold text-slate-900 text-xs">{elevation !== '--' ? `${elevation} m` : '--'}</span>
           </div>
           <div className="bg-slate-50/80 p-2.5 rounded-lg border border-slate-100">
             <span className="text-[10px] text-slate-400 block font-medium">Soil Type</span>
@@ -155,7 +151,7 @@ export default function LocationDetails({
         </div>
 
         {/* Key Risk Factors */}
-        {hasPrediction && (
+        {hasPrediction && factors && (
           <div className="mt-3.5 space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-slate-800 text-xs flex items-center gap-1">
@@ -165,10 +161,10 @@ export default function LocationDetails({
               <span className="text-[10px] text-slate-400 font-medium">ML Feature Contribution</span>
             </div>
 
-            <RiskFactorBar label="Heavy Rainfall" percentage={factors.heavy_rainfall ?? 92} color="red" />
-            <RiskFactorBar label="Steep Slope" percentage={factors.steep_slope ?? 78} color="orange" />
-            <RiskFactorBar label="Land Cover Change" percentage={factors.land_cover_change ?? 56} color="amber" />
-            <RiskFactorBar label="Historical Landslide" percentage={factors.historical_landslide ?? 49} color="yellow" />
+            {factors.heavy_rainfall != null && <RiskFactorBar label="Heavy Rainfall" percentage={factors.heavy_rainfall} color="red" />}
+            {factors.steep_slope != null && <RiskFactorBar label="Steep Slope" percentage={factors.steep_slope} color="orange" />}
+            {factors.land_cover_change != null && <RiskFactorBar label="Land Cover Change" percentage={factors.land_cover_change} color="amber" />}
+            {factors.historical_landslide != null && <RiskFactorBar label="Historical Landslide" percentage={factors.historical_landslide} color="yellow" />}
           </div>
         )}
 
@@ -182,13 +178,13 @@ export default function LocationDetails({
           </div>
           <div className="grid grid-cols-2 gap-1.5 text-[10px]">
             <div className="bg-slate-50 px-2 py-1 rounded text-slate-600">
-              Snow Cover: <span className="font-semibold text-slate-900">{location.snow_cover_pct ?? 0}%</span>
+              Snow Cover: <span className="font-semibold text-slate-900">{location.snow_cover_pct != null ? `${location.snow_cover_pct}%` : '--'}</span>
             </div>
             <div className="bg-slate-50 px-2 py-1 rounded text-slate-600">
-              Bare Soil (BSI): <span className="font-semibold text-slate-900">{location.bare_soil_pct ?? 18}%</span>
+              Bare Soil (BSI): <span className="font-semibold text-slate-900">{location.bare_soil_pct != null ? `${location.bare_soil_pct}%` : '--'}</span>
             </div>
             <div className="bg-slate-50 px-2 py-1 rounded text-slate-600">
-              Vegetation (NDVI): <span className="font-semibold text-slate-900">{location.vegetation_index ?? 0.65}</span>
+              Vegetation (NDVI): <span className="font-semibold text-slate-900">{location.vegetation_index != null ? location.vegetation_index : '--'}</span>
             </div>
             <div className="bg-slate-50 px-2 py-1 rounded text-slate-600">
               Slope Farm: <span className="font-semibold text-slate-900">{location.farm_change_flag ? 'Detected' : 'None'}</span>

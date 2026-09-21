@@ -168,11 +168,14 @@ class WeatherReconciliationService:
     @classmethod
     def get_reconciled_district_weather(cls, district_id: int, db: Session) -> Dict[str, Any]:
         """Fetch the highest-priority, freshest weather observation for a district."""
+        dist = db.query(District).filter((District.id == district_id) | (District.lgd_code == district_id)).first()
+        target_id = dist.id if dist else district_id
+
         # Query recent observations for this district ordered by time
         recent_obs = (
             db.query(WeatherObservation)
             .filter(
-                WeatherObservation.district_id == district_id,
+                WeatherObservation.district_id == target_id,
                 WeatherObservation.is_forecast == False,
             )
             .order_by(desc(WeatherObservation.observation_time))
@@ -224,9 +227,18 @@ class WeatherReconciliationService:
                 "timestamp": utcnow().isoformat(),
             }
 
+        # Map source_id to freshness tier key
+        src_id_upper = (chosen_obs.source_id or "").upper()
+        source_key = "open_meteo" if "OPEN_METEO" in src_id_upper else (
+            "mosdac" if "MOSDAC" in src_id_upper else (
+                "nasa_gpm" if "GPM" in src_id_upper else chosen_obs.source_id.lower()
+            )
+        )
+        tier = freshness_tier(source_key, chosen_obs.observation_time)
+
         return {
             "district_id": district_id,
-            "status": "FRESH",
+            "status": tier,
             "source": chosen_obs.source_id,
             "observed": {
                 "observation_time": chosen_obs.observation_time.isoformat() if chosen_obs.observation_time else None,

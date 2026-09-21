@@ -55,14 +55,25 @@ WMO_WEATHER_MAP = {
 _LAST_SUCCESS: dict[tuple[float, float], str] = {}
 
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
 def _parse_iso(value: str) -> Optional[datetime]:
-    """Open-Meteo returns local naive ISO strings under the requested timezone."""
+    """Open-Meteo returns local naive ISO strings under the requested timezone (Asia/Kolkata)."""
     if not value:
         return None
     try:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=IST).astimezone(timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
@@ -209,7 +220,7 @@ def parse_open_meteo_response(data: dict, lat: float, lon: float) -> dict[str, A
                                 if i < len(daily_precip) and daily_precip[i] is not None else None),
             })
 
-    observed_at_utc = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    observed_at_utc = _to_utc(now)
     tier = freshness_tier(SOURCE_KEY, observed_at_utc)
 
     # A partial 24 h window is real but incomplete -> DEGRADED, not silently filled.

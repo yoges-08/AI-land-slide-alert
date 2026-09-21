@@ -32,8 +32,10 @@ export default function ShapExplanationModal({ location, detailData, isOpen, onC
 
   const shapValues = detailData?.prediction?.shap_values || {};
   const sortedShap = Object.entries(shapValues).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 10);
-  const prob = detailData?.prediction?.risk_probability ? Math.round(detailData.prediction.risk_probability * 100) : 82;
-  const floodProb = detailData?.prediction?.flood_risk_probability ? Math.round(detailData.prediction.flood_risk_probability * 100) : 15;
+  const rawProb = detailData?.prediction?.hazard_index ?? detailData?.prediction?.risk_probability;
+  const prob = rawProb != null ? Math.round(rawProb * 100) : null;
+  const rawFlood = detailData?.prediction?.flood_index ?? detailData?.prediction?.flood_risk_probability;
+  const floodProb = rawFlood != null ? Math.round(rawFlood * 100) : null;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
@@ -69,9 +71,9 @@ export default function ShapExplanationModal({ location, detailData, isOpen, onC
               <div className="flex justify-between items-start">
                 <div>
                   <span className="text-[10px] text-red-600 font-bold uppercase tracking-wider">Primary Hazard</span>
-                  <h4 className="text-sm font-bold text-red-900 mt-0.5">Landslide Susceptibility</h4>
+                  <h4 className="text-sm font-bold text-red-900 mt-0.5">Landslide Susceptibility Index</h4>
                 </div>
-                <span className="text-2xl font-extrabold text-red-600">{prob}%</span>
+                <span className="text-2xl font-extrabold text-red-600">{prob != null ? `${prob}%` : 'NO DATA'}</span>
               </div>
               <p className="text-[11px] text-red-700/80 mt-1">
                 Model: XGBoost Classifier with non-linear saturation weighting.
@@ -82,9 +84,9 @@ export default function ShapExplanationModal({ location, detailData, isOpen, onC
               <div className="flex justify-between items-start">
                 <div>
                   <span className="text-[10px] text-blue-600 font-bold uppercase tracking-wider">Secondary Hazard</span>
-                  <h4 className="text-sm font-bold text-blue-900 mt-0.5">Flood & Inundation Risk</h4>
+                  <h4 className="text-sm font-bold text-blue-900 mt-0.5">Flood & Inundation Index</h4>
                 </div>
-                <span className="text-2xl font-extrabold text-blue-600">{floodProb}%</span>
+                <span className="text-2xl font-extrabold text-blue-600">{floodProb != null ? `${floodProb}%` : 'NO DATA'}</span>
               </div>
               <p className="text-[11px] text-blue-700/80 mt-1">
                 Model: Random Forest + Sentinel-1 SAR Backscatter Ingestion.

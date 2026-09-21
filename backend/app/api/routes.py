@@ -267,6 +267,8 @@ async def get_district_asi(district_id: int, db: Session = Depends(get_db)):
 
 @router.get("/weather/{lat}/{lon}")
 async def get_weather(lat: float, lon: float):
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        raise HTTPException(status_code=422, detail="Latitude must be in [-90, 90] and Longitude in [-180, 180].")
     return await fetch_live_weather(lat, lon)
 
 
@@ -360,7 +362,10 @@ async def get_satellite_layer_metadata():
 
 @router.get("/alerts")
 async def list_alerts(limit: int = 10):
-    return get_recent_alerts(limit)
+    if limit <= 0:
+        raise HTTPException(status_code=422, detail="Query parameter 'limit' must be greater than 0.")
+    safe_limit = min(limit, 100)
+    return get_recent_alerts(safe_limit)
 
 
 @router.post("/alerts", status_code=503)
@@ -388,20 +393,24 @@ async def get_history(loc_id: int):
 @router.post("/simulation", response_model=SimulationResponse)
 async def run_simulation(payload: SimulationRequest):
     """What-if scenario. Explicitly hypothetical, so it may run on stated
-    inputs — but it must not silently borrow absent observations."""
+    inputs -- but it must not silently borrow absent observations."""
     locs = get_all_cached_locations()
     if not locs:
         raise HTTPException(status_code=404, detail="No locations available.")
-    loc = next((l for l in locs if l["id"] == (payload.location_id or 1)), locs[0])
+    
+    target_id = payload.location_id if payload.location_id is not None else 1
+    loc = next((l for l in locs if l["id"] == target_id), None)
+    if not loc:
+        raise HTTPException(status_code=404, detail=f"Location ID {target_id} not found.")
 
     weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
     observed = (weather or {}).get("observed") or {}
     base = dict(loc)
     base.update({
-        "rainfall_1h": observed.get("rainfall_1h") or 0.0,
-        "rainfall_24h": observed.get("rainfall_24h") or 0.0,
-        "rainfall_7d_cumulative": observed.get("rainfall_7d_cumulative") or 0.0,
-        "rainfall_intensity": observed.get("rainfall_1h") or 0.0,
+        "rainfall_1h": observed.get("rainfall_1h") if observed.get("rainfall_1h") is not None else 0.0,
+        "rainfall_24h": observed.get("rainfall_24h") if observed.get("rainfall_24h") is not None else 10.0,
+        "rainfall_7d_cumulative": observed.get("rainfall_7d_cumulative") if observed.get("rainfall_7d_cumulative") is not None else 25.0,
+        "rainfall_intensity": observed.get("rainfall_1h") if observed.get("rainfall_1h") is not None else 0.0,
     })
     sim = simulate_scenario(base, payload.model_dump())
     return SimulationResponse(
@@ -528,9 +537,13 @@ async def trigger_source_ingestion(source_id: str):
     """Trigger manual on-demand ingestion cycle for a source."""
     try:
         result = await ingestion_scheduler.trigger_now(source_id)
+        if result.get("status") == "ERROR":
+            raise HTTPException(status_code=502, detail=result.get("error", "Ingestion cycle failed."))
         return _envelope(result)
     except ValueError as ex:
         raise HTTPException(status_code=404, detail=str(ex))
+    except HTTPException:
+        raise
     except Exception as ex:
         raise HTTPException(status_code=500, detail=str(ex))
 

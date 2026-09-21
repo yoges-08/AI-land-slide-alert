@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import settings
 from backend.app.core.freshness import utcnow
 from backend.app.ingestion.base import (
     BaseSource, IngestionError, SourceFetchError, SourceValidationError,
@@ -33,7 +34,7 @@ class MosdacInsat3dSource(BaseSource):
 
     def __init__(self):
         super().__init__()
-        self.auth_token = os.getenv("MOSDAC_AUTH_TOKEN", "")
+        self.auth_token = getattr(settings, "MOSDAC_AUTH_TOKEN", "") or os.getenv("MOSDAC_AUTH_TOKEN", "")
 
     async def fetch(self, **kwargs) -> Dict[str, Any]:
         """Fetch half-hourly QPE raster or grid metadata from MOSDAC API.

@@ -37,8 +37,10 @@ export default function SimulationModal({ location, isOpen, onClose }) {
     executeSimulation();
   }, [rainDelta, slopeOverride, snowmeltOverride, bareSoilOverride, farmFlag]);
 
-  const origProb = location.risk_probability ? Math.round(location.risk_probability * 100) : 75;
-  const simProb = simResult ? Math.round(simResult.simulated_risk_probability * 100) : origProb;
+  const rawOrig = simResult?.original_hazard_index ?? location.hazard_index ?? location.risk_probability;
+  const origProb = rawOrig != null ? Math.round(rawOrig * 100) : 50;
+  const rawSim = simResult?.simulated_hazard_index;
+  const simProb = rawSim != null ? Math.round(rawSim * 100) : origProb;
   const delta = simProb - origProb;
 
   return (
@@ -72,15 +74,15 @@ export default function SimulationModal({ location, isOpen, onClose }) {
           {/* Result Comparison Banner */}
           <div className="grid grid-cols-3 gap-3 bg-slate-900 text-white rounded-xl p-4">
             <div>
-              <span className="text-[10px] text-slate-400 uppercase font-semibold">Baseline Risk</span>
+              <span className="text-[10px] text-slate-400 uppercase font-semibold">Baseline Hazard Index</span>
               <p className="text-xl font-bold text-slate-200 mt-0.5">{origProb}%</p>
-              <span className="text-[10px] text-slate-400">{location.risk_category}</span>
+              <span className="text-[10px] text-slate-400">{simResult?.original_risk_category || location.risk_category || 'Baseline'}</span>
             </div>
             <div className="text-center border-x border-slate-800 px-2">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold">Simulated Risk</span>
+              <span className="text-[10px] text-slate-400 uppercase font-semibold">Simulated Hazard Index</span>
               <p className="text-2xl font-extrabold text-amber-400 mt-0.5">{simProb}%</p>
               <span className="text-[10px] font-semibold text-amber-300">
-                {simResult?.simulated_risk_category || 'Elevated'}
+                {simResult?.simulated_risk_category || 'Simulated'}
               </span>
             </div>
             <div className="text-right">

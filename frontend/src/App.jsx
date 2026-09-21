@@ -126,9 +126,9 @@ export default function App() {
   });
 
   // Counts for top cards
-  const highCount = (locations || []).filter((l) => (l?.risk_category || '') === 'High').length || 24;
-  const modCount = (locations || []).filter((l) => (l?.risk_category || '') === 'Moderate').length || 62;
-  const lowCount = (locations || []).filter((l) => (l?.risk_category || '').includes('Low') || (l?.risk_category || '').includes('Plain')).length || 218;
+  const highCount = (locations || []).filter((l) => (l?.risk_category || '') === 'High').length;
+  const modCount = (locations || []).filter((l) => (l?.risk_category || '') === 'Moderate').length;
+  const lowCount = (locations || []).filter((l) => (l?.risk_category || '').includes('Low') || (l?.risk_category || '').includes('Plain')).length;
 
   return (
     <div className="flex min-h-screen bg-[#f1f5f9] text-slate-800">

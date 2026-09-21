@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import settings
 from backend.app.core.freshness import utcnow
 from backend.app.ingestion.base import (
     BaseSource, IngestionError, SourceFetchError, SourceValidationError,
@@ -33,7 +34,7 @@ class NasaGpmSource(BaseSource):
 
     def __init__(self):
         super().__init__()
-        self.earthdata_token = os.getenv("EARTHDATA_TOKEN", "")
+        self.earthdata_token = getattr(settings, "EARTHDATA_TOKEN", "") or os.getenv("EARTHDATA_TOKEN", "")
 
     async def fetch(self, **kwargs) -> Dict[str, Any]:
         """Fetch half-hourly IMERG data from NASA Earthdata / GES DISC."""

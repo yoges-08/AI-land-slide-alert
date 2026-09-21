@@ -44,10 +44,13 @@ class OpenMeteoSource(BaseSource):
 
         lat = kwargs.get("latitude")
         lon = kwargs.get("longitude")
-        district_id = kwargs.get("district_id")
+        district_id = kwargs.get("district_id", 1)
 
         if lat is None or lon is None:
-            raise SourceValidationError("[OPEN_METEO] Missing 'latitude' and 'longitude' parameters for fetch")
+            # Default to primary Tier-1 benchmark (Gangtok) for automated scheduled cycles
+            lat = 27.3389
+            lon = 88.6065
+            district_id = 1
 
         params = {
             "latitude": lat,

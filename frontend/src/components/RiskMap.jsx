@@ -39,15 +39,18 @@ export default function RiskMap({
     }
 
     if (activeSatelliteLayer === 'snow') {
-      const snow = loc.snow_cover_pct || 0;
+      if (loc.snow_cover_pct == null) return '#94a3b8';
+      const snow = loc.snow_cover_pct;
       return snow > 40 ? '#06b6d4' : snow > 10 ? '#38bdf8' : '#94a3b8';
     }
     if (activeSatelliteLayer === 'soil') {
-      const soil = loc.bare_soil_pct || 15;
+      if (loc.bare_soil_pct == null) return '#94a3b8';
+      const soil = loc.bare_soil_pct;
       return soil > 45 ? '#d97706' : soil > 25 ? '#f59e0b' : '#84cc16';
     }
     if (activeSatelliteLayer === 'ndvi') {
-      const veg = loc.vegetation_index || 0.6;
+      if (loc.vegetation_index == null) return '#94a3b8';
+      const veg = loc.vegetation_index;
       return veg < 0.4 ? '#dc2626' : veg < 0.65 ? '#eab308' : '#10b981';
     }
     if (activeSatelliteLayer === 'sar') {
@@ -55,10 +58,11 @@ export default function RiskMap({
     }
 
     // Default Landslide Risk Colors
-    const prob = loc.risk_probability || 0.2;
-    if (loc.risk_category === 'High' || prob >= 0.70) return '#ef4444';
-    if (loc.risk_category === 'Moderate' || prob >= 0.30) return '#f59e0b';
-    return '#10b981';
+    const prob = loc.hazard_index ?? loc.risk_probability;
+    if (loc.risk_category === 'High' || (prob != null && prob >= 0.70)) return '#ef4444';
+    if (loc.risk_category === 'Moderate' || (prob != null && prob >= 0.30)) return '#f59e0b';
+    if (loc.risk_category === 'Low' || (prob != null && prob < 0.30)) return '#10b981';
+    return '#64748b'; // Neutral slate for unmonitored / awaiting trigger districts
   };
 
   return (

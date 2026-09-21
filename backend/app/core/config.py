@@ -46,6 +46,14 @@ class Settings(BaseSettings):
 
     SCHEDULER_AUTOSTART: bool = False
 
+    EARTHDATA_USERNAME: str = ""
+    EARTHDATA_PASSWORD: str = ""
+    EARTHDATA_TOKEN: str = ""
+
+    MOSDAC_USERNAME: str = ""
+    MOSDAC_PASSWORD: str = ""
+    MOSDAC_AUTH_TOKEN: str = ""
+
     PROTOTYPE_DISCLAIMER: str = ADVISORY_NOTICE
 
     model_config = {

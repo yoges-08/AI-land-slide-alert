@@ -90,10 +90,11 @@ export default function TopHeader({
 
       {/* Right Header Actions */}
       <div className="flex items-center space-x-4">
-        {/* Academic Prototype Pill */}
-        <div className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full text-[11px] font-medium" title="Academic prototype for demonstration only.">
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-          <span>Academic Prototype</span>
+        {/* Research Prototype Advisory Badge */}
+        <div className="flex items-center space-x-1.5 px-3 py-1 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold" title="Academic research prototype. Official warnings are issued exclusively by IMD, NDMA, and NCS.">
+          <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <span className="hidden md:inline">RESEARCH PROTOTYPE — NOT FOR OPERATIONAL DISPATCH</span>
+          <span className="md:hidden">PROTOTYPE</span>
         </div>
 
         {/* Notification Bell */}
