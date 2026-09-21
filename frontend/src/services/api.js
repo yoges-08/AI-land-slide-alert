@@ -1,4 +1,4 @@
-const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || '';
+const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? 'https://ai-land-slide-alert.onrender.com' : '');
 const API_BASE = BACKEND_URL ? `${BACKEND_URL.replace(/\/+$/, '')}/api` : '/api';
 
 export async function fetchLocations(state = '', district = '', risk = '') {

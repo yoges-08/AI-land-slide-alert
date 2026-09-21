@@ -56,41 +56,42 @@ export default function App() {
   const [isSimulationOpen, setIsSimulationOpen] = useState(false);
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
 
-  // Initial Load
-  useEffect(() => {
-    async function initData() {
-      setLoading(true);
-      try {
-        const [locs, hier, alertList] = await Promise.all([
-          fetchLocations(),
-          fetchHierarchy(),
-          fetchAlerts(8)
-        ]);
+  // Initial Load and Reconnect
+  const loadAllData = async () => {
+    setLoading(true);
+    try {
+      const [locs, hier, alertList] = await Promise.all([
+        fetchLocations(),
+        fetchHierarchy(),
+        fetchAlerts(8)
+      ]);
 
-        if (!locs || locs.length === 0) {
-          setBackendError(true);
-        } else {
-          setBackendError(false);
-        }
-
-        setLocations(locs || []);
-        setHierarchy(hier || []);
-        setAlerts(alertList || []);
-
-        // Default selected location: Gangtok (or first item)
-        const defaultLoc = locs?.find((l) => l.name === 'Gangtok') || locs?.[0];
-        if (defaultLoc) {
-          setSelectedLocation(defaultLoc);
-          loadDetailForLocation(defaultLoc.id);
-        }
-      } catch (err) {
-        console.error('Initial data load error:', err);
+      if (!locs || locs.length === 0) {
         setBackendError(true);
-      } finally {
-        setLoading(false);
+      } else {
+        setBackendError(false);
       }
+
+      setLocations(locs || []);
+      setHierarchy(hier || []);
+      setAlerts(alertList || []);
+
+      // Default selected location: Gangtok (or first item)
+      const defaultLoc = locs?.find((l) => l.name === 'Gangtok') || locs?.[0];
+      if (defaultLoc) {
+        setSelectedLocation(defaultLoc);
+        loadDetailForLocation(defaultLoc.id);
+      }
+    } catch (err) {
+      console.error('Initial data load error:', err);
+      setBackendError(true);
+    } finally {
+      setLoading(false);
     }
-    initData();
+  };
+
+  useEffect(() => {
+    loadAllData();
   }, []);
 
   const loadDetailForLocation = async (locId) => {
@@ -163,14 +164,23 @@ export default function App() {
 
         <main className="flex-1 p-5 lg:p-6 space-y-5 max-w-[1600px] mx-auto w-full">
           {backendError && !loading && (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start space-x-3 text-amber-900 shadow-sm">
-              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-              <div className="text-xs space-y-1">
-                <span className="font-bold text-amber-800 text-sm block">Backend API Disconnected</span>
-                <p className="text-amber-700 leading-relaxed">
-                  Unable to reach the live FastAPI backend server. If deployed on Vercel, please configure <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold">VITE_API_BASE_URL</code> in Vercel Project Settings pointing to your Render backend (e.g. <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold">https://your-service.onrender.com</code>) and redeploy.
-                </p>
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900 shadow-sm">
+              <div className="flex items-start space-x-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="text-xs space-y-1">
+                  <span className="font-bold text-amber-800 text-sm block">Backend API Connecting / Standby</span>
+                  <p className="text-amber-700 leading-relaxed">
+                    Render free instances sleep when inactive. Connecting to live backend at <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold">ai-land-slide-alert.onrender.com</code>.
+                  </p>
+                </div>
               </div>
+              <button
+                onClick={() => loadAllData()}
+                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-sm flex-shrink-0"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry Connection</span>
+              </button>
             </div>
           )}
 
