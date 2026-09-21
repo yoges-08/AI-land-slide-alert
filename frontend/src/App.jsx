@@ -437,6 +437,7 @@ export default function App() {
                 <LocationDetails
                   location={selectedLocation}
                   liveWeather={liveWeather}
+                  prediction={locationDetail?.prediction}
                   onClose={() => setSelectedLocation(null)}
                   onOpenAnalysis={() => setIsAnalysisOpen(true)}
                   onOpenSimulation={() => setIsSimulationOpen(true)}

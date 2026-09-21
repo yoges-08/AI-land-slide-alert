@@ -68,18 +68,18 @@ export default function WeatherCard({ weather, locationName = 'Gangtok, Sikkim',
         <div>
           <span className="text-slate-400 block text-[10px]">Humidity</span>
           <span className="font-semibold text-slate-800 flex items-center gap-1">
-            <Droplets className="w-3 h-3 text-blue-400 inline" /> {humidity}%
+            <Droplets className="w-3 h-3 text-blue-400 inline" /> {humidity != null ? `${humidity}%` : '--'}
           </span>
         </div>
         <div>
           <span className="text-slate-400 block text-[10px]">Wind</span>
           <span className="font-semibold text-slate-800 flex items-center gap-1">
-            <Wind className="w-3 h-3 text-slate-400 inline" /> {wind} km/h
+            <Wind className="w-3 h-3 text-slate-400 inline" /> {wind != null ? `${wind} km/h` : '--'}
           </span>
         </div>
         <div>
           <span className="text-slate-400 block text-[10px]">Rainfall (1h)</span>
-          <span className="font-semibold text-slate-800 text-blue-600">{rain1h} mm</span>
+          <span className="font-semibold text-slate-800 text-blue-600">{rain1h != null ? `${rain1h} mm` : '--'}</span>
         </div>
       </div>
 

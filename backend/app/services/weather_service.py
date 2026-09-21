@@ -54,6 +54,11 @@ WMO_WEATHER_MAP = {
 # last actually had data. In-memory for M0; moves to source_health in M2.
 _LAST_SUCCESS: dict[tuple[float, float], str] = {}
 
+# 15-minute in-memory TTL cache: (round(lat, 4), round(lon, 4)) -> (timestamp, parsed_data)
+import time
+_WEATHER_CACHE: dict[tuple[float, float], tuple[float, dict[str, Any]]] = {}
+WEATHER_CACHE_TTL_SECONDS: float = 15.0 * 60.0  # 15 minutes
+
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -77,27 +82,38 @@ def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
-    """Fetch observed + forecast weather, or return NO DATA. Never substitutes."""
+    """Fetch observed + forecast weather, or return NO DATA. Uses 15-min TTL cache."""
+    cache_key = (round(lat, 4), round(lon, 4))
+    now_ts = time.time()
+    if cache_key in _WEATHER_CACHE:
+        cached_time, cached_val = _WEATHER_CACHE[cache_key]
+        if (now_ts - cached_time) < WEATHER_CACHE_TTL_SECONDS:
+            return cached_val
+
     params = {
         "latitude": lat, "longitude": lon,
         "current": ["temperature_2m", "relative_humidity_2m", "precipitation",
                     "rain", "weather_code", "wind_speed_10m"],
         "hourly": ["precipitation", "rain"],
         "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min",
-                  "precipitation_sum", "precipitation_probability_max"],
+                    "precipitation_sum", "precipitation_probability_max"],
         "timezone": "Asia/Kolkata",
         "past_days": 6,
         "forecast_days": 6,
+    }
+    headers = {
+        "User-Agent": "LANDSAFE-NER/1.0 (academic-monitoring; contact: yoges0302)"
     }
 
     last_error = None
     for attempt in range(settings.OPEN_METEO_RETRIES + 1):
         try:
             async with httpx.AsyncClient(timeout=settings.OPEN_METEO_TIMEOUT_S) as client:
-                response = await client.get(OPEN_METEO_URL, params=params)
+                response = await client.get(OPEN_METEO_URL, params=params, headers=headers)
             if response.status_code == 200:
                 parsed = parse_open_meteo_response(response.json(), lat, lon)
-                _LAST_SUCCESS[(lat, lon)] = parsed["data_status"]["observed_at"] or utcnow().isoformat()
+                _LAST_SUCCESS[cache_key] = parsed["data_status"]["observed_at"] or utcnow().isoformat()
+                _WEATHER_CACHE[cache_key] = (now_ts, parsed)
                 return parsed
             last_error = f"HTTP {response.status_code}"
         except Exception as exc:  # noqa: BLE001 - any transport failure is NO DATA
