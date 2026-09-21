@@ -82,6 +82,15 @@ export default function RainfallChart({ rainfallTrend = [] }) {
             />
           </AreaChart>
         </ResponsiveContainer>
+        ) : (
+          <div className="flex flex-col items-center justify-center text-center p-4">
+            <svg className="w-8 h-8 text-slate-300 mb-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z" />
+            </svg>
+            <p className="text-xs font-medium text-slate-500">No Historical Rainfall Recorded</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Awaiting automated meteorological telemetry</p>
+          </div>
+        )}
       </div>
 
       <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
