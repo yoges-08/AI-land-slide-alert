@@ -45,6 +45,7 @@ export default function App() {
   const [liveWeather, setLiveWeather] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [backendError, setBackendError] = useState(false);
 
   // Hierarchical State & District Filter
   const [selectedState, setSelectedState] = useState('');
@@ -59,24 +60,35 @@ export default function App() {
   useEffect(() => {
     async function initData() {
       setLoading(true);
-      const [locs, hier, alertList] = await Promise.all([
-        fetchLocations(),
-        fetchHierarchy(),
-        fetchAlerts(8)
-      ]);
+      try {
+        const [locs, hier, alertList] = await Promise.all([
+          fetchLocations(),
+          fetchHierarchy(),
+          fetchAlerts(8)
+        ]);
 
-      setLocations(locs);
-      setHierarchy(hier);
-      setAlerts(alertList);
+        if (!locs || locs.length === 0) {
+          setBackendError(true);
+        } else {
+          setBackendError(false);
+        }
 
-      // Default selected location: Gangtok (or first item)
-      const defaultLoc = locs.find((l) => l.name === 'Gangtok') || locs[0];
-      if (defaultLoc) {
-        setSelectedLocation(defaultLoc);
-        loadDetailForLocation(defaultLoc.id);
+        setLocations(locs || []);
+        setHierarchy(hier || []);
+        setAlerts(alertList || []);
+
+        // Default selected location: Gangtok (or first item)
+        const defaultLoc = locs?.find((l) => l.name === 'Gangtok') || locs?.[0];
+        if (defaultLoc) {
+          setSelectedLocation(defaultLoc);
+          loadDetailForLocation(defaultLoc.id);
+        }
+      } catch (err) {
+        console.error('Initial data load error:', err);
+        setBackendError(true);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     }
     initData();
   }, []);
@@ -150,6 +162,18 @@ export default function App() {
         />
 
         <main className="flex-1 p-5 lg:p-6 space-y-5 max-w-[1600px] mx-auto w-full">
+          {backendError && !loading && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start space-x-3 text-amber-900 shadow-sm">
+              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <span className="font-bold text-amber-800 text-sm block">Backend API Disconnected</span>
+                <p className="text-amber-700 leading-relaxed">
+                  Unable to reach the live FastAPI backend server. If deployed on Vercel, please configure <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold">VITE_API_BASE_URL</code> in Vercel Project Settings pointing to your Render backend (e.g. <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold">https://your-service.onrender.com</code>) and redeploy.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* HIERARCHICAL STATE -> DISTRICT CASCADE SELECTOR BAR */}
           <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-sm flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center space-x-2">
