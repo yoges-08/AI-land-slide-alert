@@ -55,27 +55,33 @@ def load_ml_assets():
 def prepare_feature_dataframe(features: Dict[str, Any]) -> pd.DataFrame:
     """
     Constructs a single-row DataFrame aligned with training columns.
+    Enforces validation of mandatory physical parameters.
     """
+    mandatory = ["rainfall_24h", "slope", "elevation"]
+    missing = [k for k in mandatory if features.get(k) is None]
+    if missing:
+        raise ValueError(f"Missing mandatory physical feature(s) for landslide inference: {', '.join(missing)}")
+
     row = {
-        "rainfall_1h": float(features.get("rainfall_1h", 0.0)),
-        "rainfall_24h": float(features.get("rainfall_24h", 0.0)),
-        "rainfall_7d_cumulative": float(features.get("rainfall_7d_cumulative", 0.0)),
-        "rainfall_intensity": float(features.get("rainfall_intensity", 0.0)),
-        "slope": float(features.get("slope", 20.0)),
-        "elevation": float(features.get("elevation", 500.0)),
-        "distance_road": float(features.get("distance_road", 200.0)),
-        "distance_river": float(features.get("distance_river", 500.0)),
-        "historical_landslides": int(features.get("historical_landslides", 0)),
-        "snow_cover_pct": float(features.get("snow_cover_pct", 0.0)),
-        "snowmelt_rate": float(features.get("snowmelt_rate", 0.0)),
-        "bare_soil_pct": float(features.get("bare_soil_pct", 15.0)),
-        "vegetation_index": float(features.get("vegetation_index", 0.65)),
-        "latitude": float(features.get("latitude", 26.0)),
-        "longitude": float(features.get("longitude", 92.0)),
-        "soil_type": str(features.get("soil_type", "Loam")),
-        "land_cover": str(features.get("land_cover", "Dense Forest")),
-        "geology": str(features.get("geology", "Phyllite & Schist")),
-        "aspect": str(features.get("aspect", "N")),
+        "rainfall_1h": float(features.get("rainfall_1h", 0.0) or 0.0),
+        "rainfall_24h": float(features["rainfall_24h"]),
+        "rainfall_7d_cumulative": float(features.get("rainfall_7d_cumulative", 0.0) or 0.0),
+        "rainfall_intensity": float(features.get("rainfall_intensity", 0.0) or 0.0),
+        "slope": float(features["slope"]),
+        "elevation": float(features["elevation"]),
+        "distance_road": float(features.get("distance_road", 200.0) or 200.0),
+        "distance_river": float(features.get("distance_river", 500.0) or 500.0),
+        "historical_landslides": int(features.get("historical_landslides", 0) or 0),
+        "snow_cover_pct": float(features.get("snow_cover_pct", 0.0) or 0.0),
+        "snowmelt_rate": float(features.get("snowmelt_rate", 0.0) or 0.0),
+        "bare_soil_pct": float(features.get("bare_soil_pct", 15.0) or 15.0),
+        "vegetation_index": float(features.get("vegetation_index", 0.65) or 0.65),
+        "latitude": float(features.get("latitude", 26.0) or 26.0),
+        "longitude": float(features.get("longitude", 92.0) or 92.0),
+        "soil_type": str(features.get("soil_type", "Loam") or "Loam"),
+        "land_cover": str(features.get("land_cover", "Dense Forest") or "Dense Forest"),
+        "geology": str(features.get("geology", "Phyllite & Schist") or "Phyllite & Schist"),
+        "aspect": str(features.get("aspect", "N") or "N"),
         "farm_change_flag": int(bool(features.get("farm_change_flag", False))),
     }
     return pd.DataFrame([row])

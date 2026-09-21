@@ -227,13 +227,17 @@ class WeatherReconciliationService:
                 "timestamp": utcnow().isoformat(),
             }
 
-        # Map source_id to freshness tier key
+        # Map source_id to canonical SOURCE_CADENCE key
         src_id_upper = (chosen_obs.source_id or "").upper()
-        source_key = "open_meteo" if "OPEN_METEO" in src_id_upper else (
-            "mosdac" if "MOSDAC" in src_id_upper else (
-                "nasa_gpm" if "GPM" in src_id_upper else chosen_obs.source_id.lower()
-            )
-        )
+        if "MOSDAC" in src_id_upper or "INSAT" in src_id_upper:
+            source_key = "insat_3d_qpe"
+        elif "GPM" in src_id_upper or "NASA" in src_id_upper:
+            source_key = "gpm_imerg"
+        elif "OPEN_METEO" in src_id_upper:
+            source_key = "open_meteo"
+        else:
+            source_key = chosen_obs.source_id.lower()
+
         tier = freshness_tier(source_key, chosen_obs.observation_time)
 
         return {

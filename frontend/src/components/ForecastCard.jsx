@@ -11,15 +11,8 @@ export default function ForecastCard({ forecast = [], onViewMore }) {
     return <Sun className="w-5 h-5 text-amber-500 mx-auto" />;
   };
 
-  const defaultForecast = [
-    { day: 'Today', condition: 'Rain', temp_max: 24, temp_min: 18 },
-    { day: 'Tomorrow', condition: 'Light Rain', temp_max: 26, temp_min: 19 },
-    { day: 'Wed', condition: 'Cloudy', temp_max: 27, temp_min: 20 },
-    { day: 'Thu', condition: 'Mostly Cloudy', temp_max: 28, temp_min: 21 },
-    { day: 'Fri', condition: 'Partly Cloudy', temp_max: 29, temp_min: 22 },
-  ];
-
-  const displayList = forecast && forecast.length >= 5 ? forecast.slice(0, 5) : defaultForecast;
+  const hasForecast = Array.isArray(forecast) && forecast.length > 0;
+  const displayList = hasForecast ? forecast.slice(0, 5) : [];
 
   return (
     <div className="bg-white rounded-xl p-4 border border-slate-200/90 shadow-sm flex flex-col justify-between">
@@ -37,23 +30,32 @@ export default function ForecastCard({ forecast = [], onViewMore }) {
           </button>
         </div>
 
-        <div className="grid grid-cols-5 gap-1.5 text-center">
-          {displayList.map((item, idx) => (
-            <div
-              key={idx}
-              className="bg-slate-50/70 hover:bg-slate-100/80 rounded-lg p-2 transition-colors border border-slate-100/80"
-            >
-              <p className="text-[10px] font-medium text-slate-500 mb-1.5">{item.day}</p>
-              <div className="my-1.5 flex justify-center">
-                {renderForecastIcon(item.icon, item.condition)}
+        {hasForecast ? (
+          <div className="grid grid-cols-5 gap-1.5 text-center">
+            {displayList.map((item, idx) => (
+              <div
+                key={idx}
+                className="bg-slate-50/70 hover:bg-slate-100/80 rounded-lg p-2 transition-colors border border-slate-100/80"
+              >
+                <p className="text-[10px] font-medium text-slate-500 mb-1.5">{item.day}</p>
+                <div className="my-1.5 flex justify-center">
+                  {renderForecastIcon(item.icon, item.condition)}
+                </div>
+                <p className="text-[11px] font-bold text-slate-800 leading-tight mt-1">
+                  {item.temp_max != null ? `${item.temp_max}°` : '--'}
+                  <span className="text-slate-400 font-normal"> / {item.temp_min != null ? `${item.temp_min}°` : '--'}</span>
+                </p>
+                <p className="text-[9px] text-slate-500 truncate mt-0.5">{item.condition || 'Observation'}</p>
               </div>
-              <p className="text-[11px] font-bold text-slate-800 leading-tight mt-1">
-                {item.temp_max}°<span className="text-slate-400 font-normal"> / {item.temp_min}°</span>
-              </p>
-              <p className="text-[9px] text-slate-500 truncate mt-0.5">{item.condition}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div className="py-6 flex flex-col items-center justify-center text-center bg-slate-50/50 rounded-lg border border-dashed border-slate-200">
+            <Cloud className="w-6 h-6 text-slate-300 mb-1" />
+            <p className="text-xs font-medium text-slate-600">No Forecast Observation Available</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Automated meteorological telemetry offline</p>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -68,64 +68,76 @@ def get_all_cached_locations() -> List[Dict[str, Any]]:
     global LOCATIONS_CACHE
     if not LOCATIONS_CACHE:
         cleaned = []
-        seen_districts = set()
+        curated_images = {}
 
-        # 1. Load field monitoring locations from ne_india_locations.json
+        # 1. Collect image URLs from ne_india_locations.json
+        sector_items = []
         if DATA_PATH.exists():
             with open(DATA_PATH, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             for rec in raw:
-                item = {k: v for k, v in rec.items() if k not in FABRICATED_FIELDS}
-                item["provenance"] = _classify_provenance(rec)
-                item["data_status"] = "NO_DATA"
-                if "image_url" in rec:
-                    item["image_url"] = rec["image_url"]
-                cleaned.append(item)
-                key = (item.get("state", "").lower(), item.get("district", "").lower())
-                seen_districts.add(key)
+                st = rec.get("state", "").lower()
+                dist = rec.get("district", "").lower()
+                name = rec.get("name", "")
+                img = rec.get("image_url")
+                if img:
+                    curated_images[(st, dist)] = img
+                    curated_images[(st, name.lower())] = img
 
-        # 2. Fold in all 788 authoritative LGD districts for complete All-India coverage
+                # Retain sector-level monitoring sites
+                if "Sector-" in name:
+                    item = {k: v for k, v in rec.items() if k not in FABRICATED_FIELDS}
+                    item["provenance"] = _classify_provenance(rec)
+                    item["data_status"] = "NO_DATA"
+                    sector_items.append(item)
+
+        # 2. Load all 788 authoritative LGD districts with 1-based ID matching DB
         source_path = LGD_DATA_PATH if LGD_DATA_PATH.exists() else GEO_DATA_PATH
         if source_path.exists():
             with open(source_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             districts = data.get("districts", [])
-            current_id = max((l["id"] for l in cleaned), default=0) + 1
-            for d in districts:
+            for idx, d in enumerate(districts):
                 st = d.get("state") or d.get("s", "Unknown")
                 dist_name = d.get("name") or d.get("n", "Unknown")
                 key = (st.lower(), dist_name.lower())
-                if key not in seen_districts:
-                    lat = float(d["latitude"]) if "latitude" in d else (float(d["ll"][0]) if d.get("ll") else 20.0)
-                    lon = float(d["longitude"]) if "longitude" in d else (float(d["ll"][1]) if d.get("ll") else 78.0)
-                    tier = d.get("tier", 1)
-                    elev = float(d.get("elevation_m") if d.get("elevation_m") is not None else d.get("e", 500))
-                    slope = float(d.get("slope_deg") if d.get("slope_deg") is not None else d.get("sl", 15.0))
-                    geom_status = d.get("geometry_status") or d.get("status", "AVAILABLE")
-                    item = {
-                        "id": current_id,
-                        "name": dist_name,
-                        "district": dist_name,
-                        "state": st,
-                        "lgd_code": d.get("lgd_code"),
-                        "lgd_state_code": d.get("lgd_state_code"),
-                        "latitude": lat,
-                        "longitude": lon,
-                        "elevation": elev,
-                        "slope": slope,
-                        "soil_type": d.get("soil", "Clay Loam"),
-                        "geology": d.get("geo", "Sedimentary"),
-                        "coverage_tier": "FULL_HAZARD_MONITORING" if tier == 1 else "SCREENING" if tier == 2 else "PLAINS",
-                        "has_prediction": tier == 1,
-                        "geometry_status": geom_status,
-                        "terrain_provenance": "ESTIMATED / HEURISTIC — pending Copernicus GLO-30 DEM ingestion (see ARCHITECTURE.md)",
-                        "image_url": d.get("image_url"),
-                        "provenance": "CURATED_SEED",
-                        "data_status": "NO_DATA"
-                    }
-                    cleaned.append(item)
-                    seen_districts.add(key)
-                    current_id += 1
+                lat = float(d["latitude"]) if "latitude" in d else (float(d["ll"][0]) if d.get("ll") else 20.0)
+                lon = float(d["longitude"]) if "longitude" in d else (float(d["ll"][1]) if d.get("ll") else 78.0)
+                tier = d.get("tier", 1)
+                elev = float(d.get("elevation_m") if d.get("elevation_m") is not None else d.get("e", 500))
+                slope = float(d.get("slope_deg") if d.get("slope_deg") is not None else d.get("sl", 15.0))
+                geom_status = d.get("geometry_status") or d.get("status", "AVAILABLE")
+                img = d.get("image_url") or curated_images.get(key)
+                
+                item = {
+                    "id": idx + 1,  # Matches 1-indexed database District.id
+                    "name": dist_name,
+                    "district": dist_name,
+                    "state": st,
+                    "lgd_code": d.get("lgd_code"),
+                    "lgd_state_code": d.get("lgd_state_code"),
+                    "latitude": lat,
+                    "longitude": lon,
+                    "elevation": elev,
+                    "slope": slope,
+                    "soil_type": d.get("soil", "Clay Loam"),
+                    "geology": d.get("geo", "Sedimentary"),
+                    "coverage_tier": "FULL_HAZARD_MONITORING" if tier == 1 else "SCREENING" if tier == 2 else "PLAINS",
+                    "has_prediction": tier == 1,
+                    "geometry_status": geom_status,
+                    "terrain_provenance": "ESTIMATED / HEURISTIC — pending Copernicus GLO-30 DEM ingestion (see ARCHITECTURE.md)",
+                    "image_url": img,
+                    "provenance": "CURATED_SEED",
+                    "data_status": "NO_DATA"
+                }
+                cleaned.append(item)
+
+        # 3. Append sector monitoring sites with distinct IDs
+        current_id = len(cleaned) + 1
+        for s_item in sector_items:
+            s_item["id"] = current_id
+            cleaned.append(s_item)
+            current_id += 1
 
         LOCATIONS_CACHE = cleaned
     return LOCATIONS_CACHE
@@ -407,10 +419,10 @@ async def run_simulation(payload: SimulationRequest):
     observed = (weather or {}).get("observed") or {}
     base = dict(loc)
     base.update({
-        "rainfall_1h": observed.get("rainfall_1h") if observed.get("rainfall_1h") is not None else 0.0,
-        "rainfall_24h": observed.get("rainfall_24h") if observed.get("rainfall_24h") is not None else 10.0,
-        "rainfall_7d_cumulative": observed.get("rainfall_7d_cumulative") if observed.get("rainfall_7d_cumulative") is not None else 25.0,
-        "rainfall_intensity": observed.get("rainfall_1h") if observed.get("rainfall_1h") is not None else 0.0,
+        "rainfall_1h": float(observed.get("rainfall_1h", 0.0) or 0.0),
+        "rainfall_24h": float(observed.get("rainfall_24h", 0.0) or 0.0),
+        "rainfall_7d_cumulative": float(observed.get("rainfall_7d_cumulative", 0.0) or 0.0),
+        "rainfall_intensity": float(observed.get("rainfall_1h", 0.0) or 0.0),
     })
     sim = simulate_scenario(base, payload.model_dump())
     return SimulationResponse(
@@ -537,8 +549,8 @@ async def trigger_source_ingestion(source_id: str):
     """Trigger manual on-demand ingestion cycle for a source."""
     try:
         result = await ingestion_scheduler.trigger_now(source_id)
-        if result.get("status") == "ERROR":
-            raise HTTPException(status_code=502, detail=result.get("error", "Ingestion cycle failed."))
+        if result.get("success") is False or result.get("status") in ("ERROR", "BLOCKED", "OFFLINE"):
+            raise HTTPException(status_code=502, detail=result.get("error", f"Ingestion cycle failed for source '{source_id}'."))
         return _envelope(result)
     except ValueError as ex:
         raise HTTPException(status_code=404, detail=str(ex))

@@ -309,6 +309,7 @@ export default function App() {
                   <LocationDetails
                     location={selectedLocation}
                     liveWeather={liveWeather}
+                    prediction={locationDetail?.prediction}
                     onClose={() => setSelectedLocation(null)}
                     onOpenAnalysis={() => setIsAnalysisOpen(true)}
                     onOpenSimulation={() => setIsSimulationOpen(true)}
@@ -473,7 +474,7 @@ export default function App() {
                           <span className="text-[11px] text-slate-500">{loc.district}, {loc.state}</span>
                         </div>
                         <span className="text-xs font-bold text-slate-800">
-                          {loc.rainfall_24h || 25} mm
+                          {loc.rainfall_24h != null ? `${loc.rainfall_24h} mm` : '--'}
                         </span>
                       </div>
                       <div className="mt-2 text-[10px] text-slate-400 flex justify-between">

@@ -117,9 +117,9 @@ export default function RiskMap({
           {/* Base Tile Layer */}
           {baseMap === 'satellite' ? (
             <TileLayer
-              attribution="Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
-              url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-              maxZoom={18}
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+              maxZoom={19}
             />
           ) : (
             <TileLayer
@@ -144,6 +144,7 @@ export default function RiskMap({
             const color = getMarkerColor(loc);
             const isPlain = loc.has_prediction === false;
             const isHighRisk = loc.risk_category === 'High' && activeSatelliteLayer === 'none';
+            const rawHazard = loc.hazard_index ?? loc.risk_probability;
 
             return (
               <CircleMarker
@@ -178,7 +179,7 @@ export default function RiskMap({
                         <div className="flex justify-between">
                           <span className="text-slate-500">Landslide Risk:</span>
                           <span className="font-bold" style={{ color }}>
-                            {loc.risk_category} ({Math.round((loc.risk_probability || 0.2) * 100)}%)
+                            {rawHazard != null ? `${loc.risk_category || 'Active'} (${Math.round(rawHazard * 100)}%)` : 'NO DATA'}
                           </span>
                         </div>
                       )}

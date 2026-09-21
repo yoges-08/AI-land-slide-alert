@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     MOSDAC_PASSWORD: str = ""
     MOSDAC_AUTH_TOKEN: str = ""
 
+    NASA_FIRMS_MAP_KEY: str = ""
+    CDSE_CLIENT_ID: str = ""
+    CDSE_CLIENT_SECRET: str = ""
+
     PROTOTYPE_DISCLAIMER: str = ADVISORY_NOTICE
 
     model_config = {

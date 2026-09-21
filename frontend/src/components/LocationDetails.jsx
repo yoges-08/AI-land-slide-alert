@@ -18,6 +18,7 @@ import DataSourceTag from './DataSourceTag';
 export default function LocationDetails({
   location,
   liveWeather,
+  prediction,
   onClose,
   onOpenAnalysis,
   onOpenSimulation
@@ -43,11 +44,11 @@ export default function LocationDetails({
   const slope = location.slope != null ? location.slope.toFixed(0) : '--';
   const soilType = location.soil_type || 'Unclassified';
   const rain24h = liveWeather?.rainfall_24h ?? location.rainfall_24h;
-  const hasPrediction = location.has_prediction !== false && (location.hazard_index != null || location.risk_probability != null);
-  const hazardVal = location.hazard_index ?? location.risk_probability;
+  const hazardVal = prediction?.hazard_index ?? location.hazard_index ?? location.risk_probability;
+  const hasPrediction = location.has_prediction !== false && hazardVal != null;
   const prob = hazardVal != null ? Math.round(hazardVal * 100) : null;
-  const category = location.risk_category || (prob != null ? (prob >= 70 ? 'High Risk' : prob >= 30 ? 'Moderate Risk' : 'Low Risk') : 'No Active Assessment');
-  const floodCategory = location.flood_risk_category || 'No Data';
+  const category = prediction?.risk_category || location.risk_category || (prob != null ? (prob >= 70 ? 'High Risk' : prob >= 30 ? 'Moderate Risk' : 'Low Risk') : 'No Active Assessment');
+  const floodCategory = prediction?.flood_risk_category || location.flood_risk_category || 'No Data';
 
   const factors = location.key_risk_factors || null;
 

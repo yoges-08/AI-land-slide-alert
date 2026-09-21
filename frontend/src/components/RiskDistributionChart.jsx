@@ -1,16 +1,18 @@
 import React from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 
-export default function RiskDistributionChart({ highCount = 18, moderateCount = 47, lowCount = 185 }) {
-  const total = highCount + moderateCount + lowCount || 250;
-  const highPct = Math.round((highCount / total) * 100);
-  const modPct = Math.round((moderateCount / total) * 100);
-  const lowPct = 100 - highPct - modPct;
+export default function RiskDistributionChart({ highCount = 0, moderateCount = 0, lowCount = 0 }) {
+  const total = highCount + moderateCount + lowCount;
+  const highPct = total > 0 ? Math.round((highCount / total) * 100) : 0;
+  const modPct = total > 0 ? Math.round((moderateCount / total) * 100) : 0;
+  const lowPct = total > 0 ? 100 - highPct - modPct : 0;
 
-  const data = [
+  const data = total > 0 ? [
     { name: 'High Risk', value: highCount, color: '#ef4444' },
     { name: 'Moderate Risk', value: moderateCount, color: '#f59e0b' },
     { name: 'Low Risk', value: lowCount, color: '#10b981' }
+  ] : [
+    { name: 'No Data', value: 1, color: '#e2e8f0' }
   ];
 
   return (
@@ -24,7 +26,7 @@ export default function RiskDistributionChart({ highCount = 18, moderateCount = 
               data={data}
               innerRadius={50}
               outerRadius={68}
-              paddingAngle={3}
+              paddingAngle={total > 0 ? 3 : 0}
               dataKey="value"
               strokeWidth={0}
             >
@@ -37,8 +39,10 @@ export default function RiskDistributionChart({ highCount = 18, moderateCount = 
 
         {/* Center label */}
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span className="text-xl font-extrabold text-slate-900 leading-none">{total}</span>
-          <span className="text-[10px] text-slate-400 font-medium leading-tight mt-0.5">Total Locations</span>
+          <span className="text-xl font-extrabold text-slate-900 leading-none">{total > 0 ? total : '--'}</span>
+          <span className="text-[10px] text-slate-400 font-medium leading-tight mt-0.5">
+            {total > 0 ? 'Total Locations' : 'No Monitored Data'}
+          </span>
         </div>
       </div>
 

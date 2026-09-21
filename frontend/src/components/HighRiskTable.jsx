@@ -2,9 +2,9 @@ import React from 'react';
 import { ArrowRight, ChevronRight } from 'lucide-react';
 
 export default function HighRiskTable({ locations = [], onSelectLocation, onViewAll }) {
-  // Sort high risk locations first
+  // Sort high risk locations first using hazard_index or risk_probability
   const highRiskSorted = [...locations]
-    .sort((a, b) => (b.risk_probability || 0) - (a.risk_probability || 0))
+    .sort((a, b) => ((b.hazard_index ?? b.risk_probability ?? 0) - (a.hazard_index ?? a.risk_probability ?? 0)))
     .slice(0, 5);
 
   return (

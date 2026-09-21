@@ -38,10 +38,10 @@ export default function SimulationModal({ location, isOpen, onClose }) {
   }, [rainDelta, slopeOverride, snowmeltOverride, bareSoilOverride, farmFlag]);
 
   const rawOrig = simResult?.original_hazard_index ?? location.hazard_index ?? location.risk_probability;
-  const origProb = rawOrig != null ? Math.round(rawOrig * 100) : 50;
+  const origProb = rawOrig != null ? Math.round(rawOrig * 100) : null;
   const rawSim = simResult?.simulated_hazard_index;
   const simProb = rawSim != null ? Math.round(rawSim * 100) : origProb;
-  const delta = simProb - origProb;
+  const delta = (simProb != null && origProb != null) ? (simProb - origProb) : 0;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
@@ -75,12 +75,12 @@ export default function SimulationModal({ location, isOpen, onClose }) {
           <div className="grid grid-cols-3 gap-3 bg-slate-900 text-white rounded-xl p-4">
             <div>
               <span className="text-[10px] text-slate-400 uppercase font-semibold">Baseline Hazard Index</span>
-              <p className="text-xl font-bold text-slate-200 mt-0.5">{origProb}%</p>
+              <p className="text-xl font-bold text-slate-200 mt-0.5">{origProb != null ? `${origProb}%` : '--'}</p>
               <span className="text-[10px] text-slate-400">{simResult?.original_risk_category || location.risk_category || 'Baseline'}</span>
             </div>
             <div className="text-center border-x border-slate-800 px-2">
               <span className="text-[10px] text-slate-400 uppercase font-semibold">Simulated Hazard Index</span>
-              <p className="text-2xl font-extrabold text-amber-400 mt-0.5">{simProb}%</p>
+              <p className="text-2xl font-extrabold text-amber-400 mt-0.5">{simProb != null ? `${simProb}%` : '--'}</p>
               <span className="text-[10px] font-semibold text-amber-300">
                 {simResult?.simulated_risk_category || 'Simulated'}
               </span>
@@ -88,7 +88,7 @@ export default function SimulationModal({ location, isOpen, onClose }) {
             <div className="text-right">
               <span className="text-[10px] text-slate-400 uppercase font-semibold">Net Shift</span>
               <p className={`text-xl font-bold mt-0.5 ${delta >= 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                {delta >= 0 ? `+${delta}%` : `${delta}%`}
+                {origProb != null && simProb != null ? (delta >= 0 ? `+${delta}%` : `${delta}%`) : '--'}
               </p>
               <span className="text-[10px] text-slate-400">
                 {delta > 15 ? 'Significant destabilization' : 'Moderate change'}
