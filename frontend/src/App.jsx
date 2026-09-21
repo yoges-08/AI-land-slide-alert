@@ -72,15 +72,40 @@ export default function App() {
         setBackendError(false);
       }
 
-      setLocations(locs || []);
+      // Compute physical geomorphological risk baseline for all locations
+      const enrichedLocs = (locs || []).map((l) => {
+        let riskCat = l.risk_category;
+        let hazIdx = l.hazard_index;
+        if (!riskCat) {
+          const slope = Number(l.slope) || 0;
+          const elev = Number(l.elevation) || 0;
+          if (slope >= 30 && elev >= 1000) {
+            riskCat = 'High';
+            hazIdx = 0.78;
+          } else if (slope >= 15 || elev >= 450) {
+            riskCat = 'Moderate';
+            hazIdx = 0.44;
+          } else {
+            riskCat = 'Low';
+            hazIdx = 0.12;
+          }
+        }
+        return {
+          ...l,
+          risk_category: riskCat,
+          hazard_index: hazIdx,
+        };
+      });
+
+      setLocations(enrichedLocs);
       setHierarchy(hier || []);
       setAlerts(alertList || []);
 
-      // Default selected location: Gangtok (or first item)
-      const defaultLoc = locs?.find((l) => l.name === 'Gangtok') || locs?.[0];
+      // Default selected location: Gangtok (or first high-hazard location)
+      const defaultLoc = enrichedLocs.find((l) => l.name === 'Gangtok' || l.district === 'East Sikkim') || enrichedLocs[0];
       if (defaultLoc) {
         setSelectedLocation(defaultLoc);
-        loadDetailForLocation(defaultLoc.id);
+        loadDetailForLocation(defaultLoc.id, defaultLoc);
       }
     } catch (err) {
       console.error('Initial data load error:', err);
@@ -94,17 +119,25 @@ export default function App() {
     loadAllData();
   }, []);
 
-  const loadDetailForLocation = async (locId) => {
+  const loadDetailForLocation = async (locId, locObj = null) => {
     const detail = await fetchLocationDetail(locId);
     if (detail) {
       setLocationDetail(detail);
       setLiveWeather(detail.weather);
+      if (detail.location && detail.prediction) {
+        setSelectedLocation((prev) => ({
+          ...(prev || locObj || detail.location),
+          ...detail.location,
+          hazard_index: detail.prediction.hazard_index ?? prev?.hazard_index,
+          risk_category: detail.prediction.risk_category ?? prev?.risk_category,
+        }));
+      }
     }
   };
 
   const handleSelectLocation = (loc) => {
     setSelectedLocation(loc);
-    loadDetailForLocation(loc.id);
+    loadDetailForLocation(loc.id, loc);
   };
 
   // When state changes in cascade filter, update district dropdown and center map
