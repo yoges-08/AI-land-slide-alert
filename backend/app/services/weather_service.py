@@ -54,10 +54,14 @@ WMO_WEATHER_MAP = {
 # last actually had data. In-memory for M0; moves to source_health in M2.
 _LAST_SUCCESS: dict[tuple[float, float], str] = {}
 
-# 15-minute in-memory TTL cache: (round(lat, 4), round(lon, 4)) -> (timestamp, parsed_data)
+# 30-minute in-memory TTL cache: (round(lat, 4), round(lon, 4)) -> (timestamp, parsed_data)
 import time
 _WEATHER_CACHE: dict[tuple[float, float], tuple[float, dict[str, Any]]] = {}
-WEATHER_CACHE_TTL_SECONDS: float = 15.0 * 60.0  # 15 minutes
+WEATHER_CACHE_TTL_SECONDS: float = 30.0 * 60.0  # 30 minutes
+
+_OPEN_METEO_SEMAPHORE = asyncio.Semaphore(3)
+_LAST_REQUEST_TIME: float = 0.0
+_MIN_REQUEST_INTERVAL_S: float = 0.4
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -82,7 +86,8 @@ def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
-    """Fetch observed + forecast weather, or return NO DATA. Uses 15-min TTL cache."""
+    """Fetch observed + forecast weather, or return NO DATA. Uses 30-min TTL cache and rate throttling."""
+    global _LAST_REQUEST_TIME
     cache_key = (round(lat, 4), round(lon, 4))
     now_ts = time.time()
     if cache_key in _WEATHER_CACHE:
@@ -106,20 +111,26 @@ async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
     }
 
     last_error = None
-    for attempt in range(settings.OPEN_METEO_RETRIES + 1):
-        try:
-            async with httpx.AsyncClient(timeout=settings.OPEN_METEO_TIMEOUT_S) as client:
-                response = await client.get(OPEN_METEO_URL, params=params, headers=headers)
-            if response.status_code == 200:
-                parsed = parse_open_meteo_response(response.json(), lat, lon)
-                _LAST_SUCCESS[cache_key] = parsed["data_status"]["observed_at"] or utcnow().isoformat()
-                _WEATHER_CACHE[cache_key] = (now_ts, parsed)
-                return parsed
-            last_error = f"HTTP {response.status_code}"
-        except Exception as exc:  # noqa: BLE001 - any transport failure is NO DATA
-            last_error = f"{type(exc).__name__}: {exc}"
-        if attempt < settings.OPEN_METEO_RETRIES:
-            await asyncio.sleep(0.5 * (2 ** attempt))
+    async with _OPEN_METEO_SEMAPHORE:
+        elapsed = time.time() - _LAST_REQUEST_TIME
+        if elapsed < _MIN_REQUEST_INTERVAL_S:
+            await asyncio.sleep(_MIN_REQUEST_INTERVAL_S - elapsed)
+        _LAST_REQUEST_TIME = time.time()
+
+        for attempt in range(settings.OPEN_METEO_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=settings.OPEN_METEO_TIMEOUT_S) as client:
+                    response = await client.get(OPEN_METEO_URL, params=params, headers=headers)
+                if response.status_code == 200:
+                    parsed = parse_open_meteo_response(response.json(), lat, lon)
+                    _LAST_SUCCESS[cache_key] = parsed["data_status"]["observed_at"] or utcnow().isoformat()
+                    _WEATHER_CACHE[cache_key] = (now_ts, parsed)
+                    return parsed
+                last_error = f"HTTP {response.status_code}"
+            except Exception as exc:  # noqa: BLE001 - any transport failure is NO DATA
+                last_error = f"{type(exc).__name__}: {exc}"
+            if attempt < settings.OPEN_METEO_RETRIES:
+                await asyncio.sleep(0.5 * (2 ** attempt))
 
     logger.warning("Open-Meteo unavailable for (%s, %s): %s", lat, lon, last_error)
     return unavailable(lat, lon, last_error or "unknown error")

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     NASA_GIBS_WMTS_URL: str = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best"
 
-    SCHEDULER_AUTOSTART: bool = False
+    SCHEDULER_AUTOSTART: bool = True
 
     EARTHDATA_USERNAME: str = ""
     EARTHDATA_PASSWORD: str = ""

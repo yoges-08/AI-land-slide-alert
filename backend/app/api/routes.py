@@ -241,7 +241,7 @@ async def get_state_district_hierarchy():
 async def get_location_detail(loc_id: int):
     loc = _find(loc_id)
     weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
-    satellite = get_satellite_observation(loc)
+    satellite = await get_satellite_observation(loc)
 
     features = _features_from(loc, weather, satellite)
     prediction = predict_risk(features) if features else _unavailable_prediction(weather, satellite)
@@ -321,7 +321,7 @@ async def get_location_risk(loc_id: int):
     """
     loc = _find(loc_id)
     weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
-    satellite = get_satellite_observation(loc)
+    satellite = await get_satellite_observation(loc)
     features = _features_from(loc, weather, satellite)
 
     if features is None:
@@ -351,7 +351,7 @@ async def get_location_risk(loc_id: int):
 @router.get("/satellite/{loc_id}", response_model=SatelliteInfoResponse)
 async def get_satellite_info(loc_id: int):
     loc = _find(loc_id)
-    sat = get_satellite_observation(loc)
+    sat = await get_satellite_observation(loc)
     return SatelliteInfoResponse(
         location_id=loc_id, location_name=loc["name"],
         district=loc.get("district", loc["state"]), state=loc.get("state"),
@@ -447,7 +447,7 @@ async def get_ml_model_info():
 async def export_risk_report(loc_id: int):
     loc = _find(loc_id)
     weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
-    satellite = get_satellite_observation(loc)
+    satellite = await get_satellite_observation(loc)
     features = _features_from(loc, weather, satellite)
     hazard = predict_risk(features) if features else _unavailable_prediction(weather, satellite)
 

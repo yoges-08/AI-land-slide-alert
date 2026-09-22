@@ -12,6 +12,20 @@ from backend.app.services.ml_service import load_ml_assets
 logger = logging.getLogger(__name__)
 
 
+import asyncio
+import httpx
+
+async def _keep_alive():
+    """Background task to self-ping every 10 minutes to prevent Render free instance sleeping."""
+    while True:
+        await asyncio.sleep(600)  # 10 minutes
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                await client.get("https://ai-land-slide-alert.onrender.com/health")
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("[LANDSAFE-NER] starting in %s mode", settings.LANDSAFE_MODE)
@@ -22,7 +36,10 @@ async def lifespan(app: FastAPI):
     if settings.SCHEDULER_AUTOSTART:
         ingestion_scheduler.start()
         logger.info("[LANDSAFE-NER] Ingestion scheduler started")
+
+    keep_alive_task = asyncio.create_task(_keep_alive())
     yield
+    keep_alive_task.cancel()
     if ingestion_scheduler.is_running:
         ingestion_scheduler.shutdown()
         logger.info("[LANDSAFE-NER] Ingestion scheduler stopped")
