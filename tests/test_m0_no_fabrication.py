@@ -60,10 +60,18 @@ def test_fabricated_fields_never_leave_the_loader():
 
 def test_satellite_returns_no_data_not_derived_values(client):
     body = client.get("/api/satellite/1").json()
-    for field in ("snow_cover_pct", "bare_soil_pct", "vegetation_index",
-                  "snowmelt_rate", "farm_change_flag", "flood_extent_flag"):
+    for field in ("snow_cover_pct", "snowmelt_rate", "farm_change_flag", "flood_extent_flag"):
         assert body[field] is None
-    assert "pending" in body["source"].lower()
+    if "copernicus" in body["source"].lower():
+        # Live M4 ingestion is active
+        if body["vegetation_index"] is not None:
+            assert 0.0 <= body["vegetation_index"] <= 1.0
+        if body["bare_soil_pct"] is not None:
+            assert 0.0 <= body["bare_soil_pct"] <= 100.0
+    else:
+        assert body["vegetation_index"] is None
+        assert body["bare_soil_pct"] is None
+        assert "pending" in body["source"].lower()
 
 
 def test_satellite_does_not_claim_nasa_or_copernicus_provenance(client):

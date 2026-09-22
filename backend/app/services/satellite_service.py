@@ -111,20 +111,26 @@ async def _fetch_sentinel2_indices(lat: float, lon: float) -> Optional[Dict[str,
                 return None
 
             end_date = datetime.now(timezone.utc)
-            start_date = end_date - timedelta(days=12)
+            start_date = end_date - timedelta(days=20)
             bbox_delta = 0.05
 
             evalscript = """//VERSION=3
 function setup() {
-    return { input: ["B04", "B08", "SCL"], output: { bands: 2, sampleType: "FLOAT32" } };
+    return {
+        input: [{ bands: ["B04", "B08", "SCL", "dataMask"] }],
+        output: [
+            { id: "default", bands: 2, sampleType: "FLOAT32" },
+            { id: "dataMask", bands: 1 }
+        ]
+    };
 }
 function evaluatePixel(sample) {
-    if (sample.SCL == 4 || sample.SCL == 5) {
-        let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04 + 0.0001);
-        let bare = (sample.SCL == 5) ? 1.0 : 0.0;
-        return [ndvi, bare];
-    }
-    return [NaN, NaN];
+    let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04 + 0.0001);
+    let bare = (sample.SCL == 5) ? 1.0 : 0.0;
+    return {
+        default: [ndvi, bare],
+        dataMask: [sample.dataMask]
+    };
 }"""
 
             stat_payload = {
@@ -140,7 +146,7 @@ function evaluatePixel(sample) {
                                 "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
                                 "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
                             },
-                            "maxCloudCoverage": 30
+                            "maxCloudCoverage": 80
                         }
                     }]
                 },
@@ -149,7 +155,7 @@ function evaluatePixel(sample) {
                         "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
                         "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
                     },
-                    "aggregationInterval": {"of": "P12D"},
+                    "aggregationInterval": {"of": "P20D"},
                     "evalscript": evalscript
                 }
             }
@@ -168,7 +174,7 @@ function evaluatePixel(sample) {
                 return None
 
             latest = intervals[-1]
-            outputs = latest.get("outputs", {}).get("data", {}).get("bands", {})
+            outputs = latest.get("outputs", {}).get("default", {}).get("bands", {})
             ndvi_stats = outputs.get("B0", {})
             bare_stats = outputs.get("B1", {})
 
