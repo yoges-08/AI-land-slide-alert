@@ -78,12 +78,16 @@ def init_default_sources() -> None:
         from backend.app.ingestion.sources.weather import (
             MosdacInsat3dSource, NasaGpmSource, OpenMeteoSource
         )
+        from backend.app.ingestion.sources.seismic import UsgsEarthquakeSource
+
         if not source_registry.get("MOSDAC_INSAT3D_QPE"):
             source_registry.register(MosdacInsat3dSource())
         if not source_registry.get("NASA_GPM_IMERG"):
             source_registry.register(NasaGpmSource())
         if not source_registry.get("OPEN_METEO"):
             source_registry.register(OpenMeteoSource())
+        if not source_registry.get("USGS_FDSN"):
+            source_registry.register(UsgsEarthquakeSource())
     except Exception as exc:
         logger.debug("Source auto-registration deferred: %s", exc)
 

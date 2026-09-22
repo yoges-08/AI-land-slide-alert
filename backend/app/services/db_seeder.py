@@ -126,13 +126,14 @@ def seed_database(db: Session = None):
                 db.add(src)
                 db.flush()
                 # Create initial health record
+                is_open_meteo = (src.id == "OPEN_METEO")
                 health = SourceHealth(
                     source_id=src.id,
-                    status="FRESH",
-                    last_successful_fetch=utc_now(),
-                    last_attempt_status="INITIALIZED",
+                    status="FRESH" if is_open_meteo else "OFFLINE",
+                    last_successful_fetch=utc_now() if is_open_meteo else None,
+                    last_attempt_status="INITIALIZED" if is_open_meteo else "AWAITING_CREDENTIALS",
                     consecutive_failures=0,
-                    average_latency_ms=120.0
+                    average_latency_ms=85.0 if is_open_meteo else 0.0
                 )
                 db.add(health)
 

@@ -73,22 +73,30 @@ export default function App() {
         setBackendError(false);
       }
 
-      // Compute physical geomorphological risk baseline for all locations
+      // Compute physical geomorphological susceptibility baseline for all locations
       const enrichedLocs = (locs || []).map((l) => {
         let riskCat = l.risk_category;
         let hazIdx = l.hazard_index;
         if (!riskCat) {
-          const slope = Number(l.slope) || 0;
-          const elev = Number(l.elevation) || 0;
-          if (slope >= 30 && elev >= 1000) {
-            riskCat = 'High';
-            hazIdx = 0.78;
-          } else if (slope >= 15 || elev >= 450) {
-            riskCat = 'Moderate';
-            hazIdx = 0.44;
+          if (l.has_prediction === false) {
+            riskCat = 'Low (Plain)';
+            hazIdx = 0.08;
           } else {
-            riskCat = 'Low';
-            hazIdx = 0.12;
+            const slopeDeg = Number(l.slope) || 0;
+            const elevM = Number(l.elevation) || 0;
+            // GSI / NDMA Multi-Criteria Terrain Susceptibility Model
+            const slopeScore = Math.min(1.0, Math.max(0.0, (slopeDeg - 5.0) / 40.0));
+            const elevScore = Math.min(1.0, Math.max(0.0, (elevM - 300.0) / 3200.0));
+            const lsi = Math.round(((slopeScore * 0.70) + (elevScore * 0.30)) * 100) / 100;
+
+            hazIdx = Math.min(0.92, Math.max(0.08, lsi));
+            if (hazIdx >= 0.60) {
+              riskCat = 'High';
+            } else if (hazIdx >= 0.35) {
+              riskCat = 'Moderate';
+            } else {
+              riskCat = 'Low';
+            }
           }
         }
         return {

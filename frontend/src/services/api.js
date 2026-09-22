@@ -54,7 +54,7 @@ const WMO_MAP = {
 
 export async function fetchDirectOpenMeteo(lat, lon) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,precipitation,rain,weather_code,wind_speed_10m&hourly=precipitation,rain&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=Asia%2FKolkata&past_days=6&forecast_days=6`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,precipitation,rain,weather_code,wind_speed_10m&hourly=precipitation,rain,soil_moisture_0_to_1cm,soil_temperature_0cm,cloud_cover&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=Asia%2FKolkata&past_days=6&forecast_days=6`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -66,16 +66,37 @@ export async function fetchDirectOpenMeteo(lat, lon) {
     const wmoCode = current.weather_code ?? 0;
     const [condText, icon] = WMO_MAP[wmoCode] || ['Clear sky', 'Sun'];
 
-    // 24h rainfall sum from recent 24 hourly records
+    // D3 Fix: Strictly sum observed hours ending at current time (past 24h only)
+    const hourlyTimes = hourly.time || [];
     const hourlyPrecip = hourly.precipitation || [];
-    const recent24 = hourlyPrecip.slice(Math.max(0, hourlyPrecip.length - 24));
-    const rainfall24h = Math.round((recent24.reduce((a, b) => a + (Number(b) || 0), 0)) * 10) / 10;
+    const hourlySoil = hourly.soil_moisture_0_to_1cm || [];
+    const nowIso = current.time || new Date().toISOString();
+    const nowMs = new Date(nowIso).getTime();
+    const windowStartMs = nowMs - (24 * 3600 * 1000);
 
-    // 7-day trend (past 7 days up to today)
+    let rainfall24hSum = 0;
+    let latestSoilMoisture = null;
+    for (let i = 0; i < hourlyTimes.length; i++) {
+      const t = new Date(hourlyTimes[i]).getTime();
+      if (t > windowStartMs && t <= nowMs) {
+        rainfall24hSum += Number(hourlyPrecip[i]) || 0;
+      }
+      if (t <= nowMs && hourlySoil[i] != null) {
+        latestSoilMoisture = Math.round(Number(hourlySoil[i]) * 100);
+      }
+    }
+    const rainfall24h = Math.round(rainfall24hSum * 10) / 10;
+
+    // 7-day trend: past 7 days up to and including today
     const dailyTimes = daily.time || [];
     const dailyPrecip = daily.precipitation_sum || [];
+    const todayDateStr = nowIso.slice(0, 10);
+    let todayIdx = dailyTimes.findIndex((d) => d && d.startsWith(todayDateStr));
+    if (todayIdx === -1) todayIdx = Math.min(6, dailyTimes.length - 1);
+
     const rainfallTrend7d = [];
-    for (let i = 0; i < Math.min(7, dailyTimes.length); i++) {
+    const startIdx = Math.max(0, todayIdx - 6);
+    for (let i = startIdx; i <= todayIdx; i++) {
       const dtStr = dailyTimes[i];
       const d = new Date(dtStr);
       const formattedDate = !isNaN(d.getTime()) ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : dtStr;
@@ -88,15 +109,16 @@ export async function fetchDirectOpenMeteo(lat, lon) {
 
     const rainfall7d = Math.round((rainfallTrend7d.reduce((a, b) => a + (b.rainfall_mm || 0), 0)) * 10) / 10;
 
-    // 5-day forecast
+    // 5-day forecast starting today / tomorrow
     const forecast5d = [];
     const dailyCodes = daily.weather_code || [];
     const dailyMax = daily.temperature_2m_max || [];
     const dailyMin = daily.temperature_2m_min || [];
-    for (let i = 6; i < Math.min(11, dailyTimes.length); i++) {
+    for (let i = todayIdx; i < Math.min(todayIdx + 5, dailyTimes.length); i++) {
       const dtStr = dailyTimes[i];
+      const offset = i - todayIdx;
       const d = new Date(dtStr);
-      const dayName = !isNaN(d.getTime()) ? d.toLocaleDateString('en-US', { weekday: 'short' }) : `Day ${i - 5}`;
+      const dayName = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : (!isNaN(d.getTime()) ? d.toLocaleDateString('en-US', { weekday: 'short' }) : `Day ${offset}`);
       const code = dailyCodes[i] ?? 0;
       const [fCond, fIcon] = WMO_MAP[code] || ['Clear', 'Sun'];
       forecast5d.push({
@@ -119,6 +141,7 @@ export async function fetchDirectOpenMeteo(lat, lon) {
       rainfall_1h: current.precipitation != null ? Math.round(current.precipitation * 10) / 10 : 0.0,
       rainfall_24h: rainfall24h,
       rainfall_7d_cumulative: rainfall7d,
+      soil_moisture_pct: latestSoilMoisture,
       weather_code: wmoCode,
       condition_text: condText,
       icon_name: icon,
@@ -128,6 +151,7 @@ export async function fetchDirectOpenMeteo(lat, lon) {
         rainfall_1h: current.precipitation || 0.0,
         rainfall_24h: rainfall24h,
         rainfall_7d_cumulative: rainfall7d,
+        soil_moisture_pct: latestSoilMoisture,
       },
       last_updated: new Date().toISOString(),
     };
