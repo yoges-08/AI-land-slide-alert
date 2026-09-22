@@ -188,7 +188,7 @@ export default function LocationDetails({
               Vegetation (NDVI): <span className="font-semibold text-slate-900">{location.vegetation_index != null ? location.vegetation_index : '--'}</span>
             </div>
             <div className="bg-slate-50 px-2 py-1 rounded text-slate-600">
-              Slope Farm: <span className="font-semibold text-slate-900">{location.farm_change_flag ? 'Detected' : 'None'}</span>
+              Fire Hotspot: <span className="font-semibold text-slate-900">{location.fire_detected ? 'Active Fire' : location.fire_detected === false ? 'None' : (location.farm_change_flag ? 'Farm Detected' : 'None')}</span>
             </div>
           </div>
         </div>

@@ -141,12 +141,17 @@ export default function App() {
       if (detail.weather) {
         setLiveWeather(detail.weather);
       }
-      if (detail.location && detail.prediction) {
+      if (detail.location) {
         setSelectedLocation((prev) => ({
           ...(prev || locObj || detail.location),
           ...detail.location,
-          hazard_index: detail.prediction.hazard_index ?? prev?.hazard_index,
-          risk_category: detail.prediction.risk_category ?? prev?.risk_category,
+          vegetation_index: detail.satellite?.vegetation_index ?? prev?.vegetation_index,
+          bare_soil_pct: detail.satellite?.bare_soil_pct ?? prev?.bare_soil_pct,
+          snow_cover_pct: detail.satellite?.snow_cover_pct ?? prev?.snow_cover_pct,
+          satellite_source: detail.satellite?.source ?? prev?.satellite_source,
+          fire_detected: detail.satellite?.fire_detected ?? prev?.fire_detected,
+          hazard_index: detail.prediction?.hazard_index ?? prev?.hazard_index,
+          risk_category: detail.prediction?.risk_category ?? prev?.risk_category,
         }));
       }
     }
