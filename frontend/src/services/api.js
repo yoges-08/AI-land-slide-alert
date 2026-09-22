@@ -174,40 +174,61 @@ export async function predictLandslide(features) {
   }
 }
 
-export async function fetchLocationDetail(locId) {
+export async function fetchLocationDetail(locId, fallbackLoc = null) {
   try {
-    const res = await fetch(`${API_BASE}/location/${locId}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    let data = null;
+    try {
+      const res = await fetch(`${API_BASE}/location/${locId}`);
+      if (res.ok) {
+        data = await res.json();
+      }
+    } catch (netErr) {
+      console.warn(`Backend fetch failed for location ${locId}:`, netErr);
+    }
 
-    // If backend weather was rate-limited (OFFLINE) on Render, fetch direct live weather
-    if (!data.weather || data.weather.status === 'OFFLINE' || data.weather.temperature == null) {
-      const directWeather = await fetchDirectOpenMeteo(data.location.latitude, data.location.longitude);
-      if (directWeather) {
-        data.weather = directWeather;
+    if (!data && fallbackLoc) {
+      data = {
+        location: fallbackLoc,
+        weather: null,
+        satellite: { data_status: { status: 'STANDBY', source: 'NASA/Copernicus' } },
+        prediction: null
+      };
+    }
 
-        // Trigger real ML model inference via /api/predict using observed physical features
-        const prediction = await predictLandslide({
-          ...data.location,
-          ...directWeather,
-          rainfall_1h: directWeather.rainfall_1h,
-          rainfall_24h: directWeather.rainfall_24h,
-          rainfall_7d_cumulative: directWeather.rainfall_7d_cumulative,
-        });
-        if (prediction) {
-          data.prediction = {
-            hazard_index: prediction.hazard_index,
-            risk_category: prediction.risk_category,
-            flood_index: prediction.flood_index,
-            flood_risk_category: prediction.flood_risk_category,
-            top_factors: prediction.top_factors,
-            shap_values: prediction.shap_values,
-            status: 'LIVE_MODEL_INFERENCE',
-            inputs: {
-              weather: { status: 'LIVE', source: 'Open-Meteo Live Telemetry' },
-              satellite: data.satellite?.data_status || { status: 'STANDBY', source: 'NASA/Copernicus' }
+    if (data && data.location) {
+      // If backend weather was rate-limited (OFFLINE) on Render, fetch direct live weather
+      if (!data.weather || data.weather.status === 'OFFLINE' || data.weather.temperature == null) {
+        const directWeather = await fetchDirectOpenMeteo(data.location.latitude, data.location.longitude);
+        if (directWeather) {
+          data.weather = directWeather;
+
+          // Trigger real ML model inference via /api/predict using observed physical features
+          try {
+            const prediction = await predictLandslide({
+              ...data.location,
+              ...directWeather,
+              rainfall_1h: directWeather.rainfall_1h,
+              rainfall_24h: directWeather.rainfall_24h,
+              rainfall_7d_cumulative: directWeather.rainfall_7d_cumulative,
+            });
+            if (prediction) {
+              data.prediction = {
+                hazard_index: prediction.hazard_index,
+                risk_category: prediction.risk_category,
+                flood_index: prediction.flood_index,
+                flood_risk_category: prediction.flood_risk_category,
+                top_factors: prediction.top_factors,
+                shap_values: prediction.shap_values,
+                status: 'LIVE_MODEL_INFERENCE',
+                inputs: {
+                  weather: { status: 'LIVE', source: 'Open-Meteo Live Telemetry' },
+                  satellite: data.satellite?.data_status || { status: 'STANDBY', source: 'NASA/Copernicus' }
+                }
+              };
             }
-          };
+          } catch (predErr) {
+            console.warn('Prediction inference error:', predErr);
+          }
         }
       }
     }

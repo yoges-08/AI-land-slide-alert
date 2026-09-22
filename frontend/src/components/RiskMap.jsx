@@ -203,7 +203,7 @@ export default function RiskMap({
         </MapContainer>
 
         {/* Floating Satellite Intelligence Layer Switcher */}
-        <div className="absolute top-3 left-3 z-[1000] max-w-[95%]">
+        <div className="absolute top-3 left-3 z-20 max-w-[95%]">
           <SatelliteLayerToggle
             activeLayer={activeSatelliteLayer}
             onToggleLayer={setActiveSatelliteLayer}
@@ -213,7 +213,7 @@ export default function RiskMap({
         </div>
 
         {/* Floating Bottom Legend */}
-        <div className="absolute bottom-3 left-3 z-[1000] bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200/90 shadow-md text-xs flex flex-wrap items-center gap-3">
+        <div className="absolute bottom-3 left-3 z-20 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200/90 shadow-md text-xs flex flex-wrap items-center gap-3">
           <div className="flex items-center space-x-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
             <span className="text-[11px] font-medium text-slate-700">Low Risk</span>

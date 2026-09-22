@@ -20,7 +20,8 @@ import {
   fetchLocations,
   fetchHierarchy,
   fetchLocationDetail,
-  fetchAlerts
+  fetchAlerts,
+  fetchWeather
 } from './services/api';
 
 import {
@@ -120,10 +121,18 @@ export default function App() {
   }, []);
 
   const loadDetailForLocation = async (locId, locObj = null) => {
-    const detail = await fetchLocationDetail(locId);
+    const targetLoc = locObj || (locations || []).find((l) => l && l.id === locId);
+    if (targetLoc?.latitude && targetLoc?.longitude) {
+      fetchWeather(targetLoc.latitude, targetLoc.longitude).then((w) => {
+        if (w) setLiveWeather(w);
+      });
+    }
+    const detail = await fetchLocationDetail(locId, targetLoc);
     if (detail) {
       setLocationDetail(detail);
-      setLiveWeather(detail.weather);
+      if (detail.weather) {
+        setLiveWeather(detail.weather);
+      }
       if (detail.location && detail.prediction) {
         setSelectedLocation((prev) => ({
           ...(prev || locObj || detail.location),

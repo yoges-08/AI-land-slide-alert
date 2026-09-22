@@ -9,8 +9,9 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
+        target: 'https://ai-land-slide-alert.onrender.com',
+        changeOrigin: true,
+        secure: false,
       }
     }
   }
