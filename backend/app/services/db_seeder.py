@@ -5,6 +5,7 @@ data source registry with health tracking, and model versions from geo_data.json
 """
 import json
 import logging
+import os
 from pathlib import Path
 from sqlalchemy.orm import Session
 from backend.app.core.database import SessionLocal, init_db
@@ -127,11 +128,25 @@ def seed_database(db: Session = None):
                 db.flush()
                 # Create initial health record
                 is_open_meteo = (src.id == "OPEN_METEO")
+                has_creds = is_open_meteo
+                if src.id == "MOSDAC_INSAT3D_QPE":
+                    has_creds = bool(os.getenv("MOSDAC_AUTH_TOKEN", "")) or bool(os.getenv("MOSDAC_USERNAME", ""))
+                elif src.id == "NASA_GPM_IMERG":
+                    has_creds = bool(os.getenv("EARTHDATA_TOKEN", ""))
+                elif src.id in ("COPERNICUS_S1_SAR", "COPERNICUS_S2_OPTICAL", "COPERNICUS_DEM_GLO30"):
+                    has_creds = bool(os.getenv("CDSE_CLIENT_ID", ""))
+                elif src.id == "NASA_FIRMS":
+                    has_creds = bool(os.getenv("NASA_FIRMS_MAP_KEY", ""))
+                elif src.id == "USGS_FDSN":
+                    has_creds = True
+                elif src.id == "NASA_COOLR":
+                    has_creds = bool(os.getenv("EARTHDATA_TOKEN", ""))
+
                 health = SourceHealth(
                     source_id=src.id,
                     status="FRESH" if is_open_meteo else "OFFLINE",
                     last_successful_fetch=utc_now() if is_open_meteo else None,
-                    last_attempt_status="INITIALIZED" if is_open_meteo else "AWAITING_CREDENTIALS",
+                    last_attempt_status="INITIALIZED" if is_open_meteo else ("CREDENTIALS_OK" if has_creds else "AWAITING_CREDENTIALS"),
                     consecutive_failures=0,
                     average_latency_ms=85.0 if is_open_meteo else 0.0
                 )

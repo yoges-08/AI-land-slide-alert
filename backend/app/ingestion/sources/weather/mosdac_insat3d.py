@@ -53,6 +53,23 @@ class MosdacInsat3dSource(BaseSource):
         }
         if self.auth_token:
             headers["Authorization"] = f"Bearer {self.auth_token}"
+        elif os.getenv("MOSDAC_USERNAME") and os.getenv("MOSDAC_PASSWORD"):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as auth_client:
+                    login_resp = await auth_client.post(
+                        "https://www.mosdac.gov.in/api/v1/auth/login",
+                        json={
+                            "username": os.getenv("MOSDAC_USERNAME"),
+                            "password": os.getenv("MOSDAC_PASSWORD"),
+                        }
+                    )
+                    if login_resp.status_code == 200:
+                        token = login_resp.json().get("token") or login_resp.json().get("access_token")
+                        if token:
+                            self.auth_token = token
+                            headers["Authorization"] = f"Bearer {token}"
+            except Exception as exc:
+                logger.debug("MOSDAC auto-login skipped: %s", exc)
 
         params = kwargs.get("params", {
             "product": "3D_QPE",
