@@ -18,6 +18,7 @@ export default function TopHeader({
     : locations.filter(
         (loc) =>
           loc.name.toLowerCase().includes(query.toLowerCase()) ||
+          (loc.district && loc.district.toLowerCase().includes(query.toLowerCase())) ||
           loc.state.toLowerCase().includes(query.toLowerCase())
       ).slice(0, 8);
 
