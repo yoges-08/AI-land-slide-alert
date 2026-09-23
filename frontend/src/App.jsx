@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import TopHeader from './components/TopHeader';
 import StatCard from './components/StatCard';
@@ -21,7 +21,8 @@ import {
   fetchHierarchy,
   fetchLocationDetail,
   fetchAlerts,
-  fetchWeather
+  fetchWeather,
+  fetchDirectOpenMeteo
 } from './services/api';
 
 import {
@@ -56,6 +57,9 @@ export default function App() {
   // Modals state
   const [isSimulationOpen, setIsSimulationOpen] = useState(false);
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
+
+  // Active request ref to prevent race conditions during rapid district switching
+  const activeReqRef = useRef(0);
 
   // Initial Load and Reconnect
   const loadAllData = async () => {
@@ -131,33 +135,50 @@ export default function App() {
   }, []);
 
   const loadDetailForLocation = async (locId, locObj = null) => {
+    const reqId = ++activeReqRef.current;
     const targetLoc = locObj || (locations || []).find((l) => l && l.id === locId);
-    if (targetLoc?.latitude && targetLoc?.longitude) {
-      fetchWeather(targetLoc.latitude, targetLoc.longitude).then((w) => {
-        if (w) setLiveWeather(w);
+    if (!targetLoc) return;
+
+    // Fast-path: Instantly fetch direct weather (<250ms) to update forecast and rainfall charts
+    if (targetLoc.latitude && targetLoc.longitude) {
+      fetchDirectOpenMeteo(targetLoc.latitude, targetLoc.longitude).then((directW) => {
+        if (activeReqRef.current === reqId && directW) {
+          setLiveWeather(directW);
+        }
+      }).catch((err) => {
+        console.warn('Fast direct weather error:', err);
       });
     }
-    const detail = await fetchLocationDetail(locId, targetLoc);
-    if (detail) {
+
+    // Heavy background fetch: full multi-satellite indices (Sentinel-2, Sentinel-1, NASA FIRMS) & ML prediction
+    try {
+      const detail = await fetchLocationDetail(locId, targetLoc);
+      if (activeReqRef.current !== reqId || !detail) return;
+
       setLocationDetail(detail);
       if (detail.weather) {
         setLiveWeather(detail.weather);
       }
       if (detail.location) {
-        setSelectedLocation((prev) => ({
-          ...(prev || locObj || detail.location),
-          ...detail.location,
-          vegetation_index: detail.satellite?.vegetation_index ?? prev?.vegetation_index,
-          bare_soil_pct: detail.satellite?.bare_soil_pct ?? prev?.bare_soil_pct,
-          snow_cover_pct: detail.satellite?.snow_cover_pct ?? prev?.snow_cover_pct,
-          satellite_source: detail.satellite?.source ?? prev?.satellite_source,
-          fire_detected: detail.satellite?.fire_detected ?? prev?.fire_detected,
-          hazard_index: detail.prediction?.hazard_index ?? prev?.hazard_index,
-          risk_category: detail.prediction?.risk_category ?? prev?.risk_category,
-          risk_source: detail.prediction?.status === 'DEGRADED' ? 'DEGRADED_SATELLITE' : (detail.prediction?.hazard_index != null ? 'LIVE_MODEL' : prev?.risk_source),
-          risk_note: detail.prediction?.reason || (detail.prediction?.hazard_index != null ? 'Model prediction' : prev?.risk_note),
-        }));
+        setSelectedLocation((prev) => {
+          if (activeReqRef.current !== reqId) return prev;
+          return {
+            ...(prev || locObj || detail.location),
+            ...detail.location,
+            vegetation_index: detail.satellite?.vegetation_index ?? prev?.vegetation_index,
+            bare_soil_pct: detail.satellite?.bare_soil_pct ?? prev?.bare_soil_pct,
+            snow_cover_pct: detail.satellite?.snow_cover_pct ?? prev?.snow_cover_pct,
+            satellite_source: detail.satellite?.source ?? prev?.satellite_source,
+            fire_detected: detail.satellite?.fire_detected ?? prev?.fire_detected,
+            hazard_index: detail.prediction?.hazard_index ?? prev?.hazard_index,
+            risk_category: detail.prediction?.risk_category ?? prev?.risk_category,
+            risk_source: detail.prediction?.status === 'DEGRADED' ? 'DEGRADED_SATELLITE' : (detail.prediction?.hazard_index != null ? 'LIVE_MODEL' : prev?.risk_source),
+            risk_note: detail.prediction?.reason || (detail.prediction?.hazard_index != null ? 'Model prediction' : prev?.risk_note),
+          };
+        });
       }
+    } catch (err) {
+      console.warn(`Location detail fetch error for id ${locId}:`, err);
     }
   };
 
