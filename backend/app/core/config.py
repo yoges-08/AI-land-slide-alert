@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     CDSE_CLIENT_ID: str = ""
     CDSE_CLIENT_SECRET: str = ""
 
+    # AI Weather & Hazard Assistant LLM configuration
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")  # gemini | openai | fallback
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", os.getenv("GEMINI_API_KEY", os.getenv("OPENAI_API_KEY", "")))
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-1.5-flash")
+    LLM_TEMPERATURE: float = 0.2
+
     PROTOTYPE_DISCLAIMER: str = ADVISORY_NOTICE
 
     model_config = {

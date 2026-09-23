@@ -98,7 +98,7 @@ def test_no_production_module_imports_the_demo_package():
     app_dir = Path(__file__).resolve().parent.parent / "backend" / "app"
     offenders = []
     for path in app_dir.rglob("*.py"):
-        for num, line in enumerate(path.read_text().splitlines(), 1):
+        for num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith(("import backend.demo", "from backend.demo")):
                 indented = line[0] in " \t"     # function-scoped, gated by is_demo()

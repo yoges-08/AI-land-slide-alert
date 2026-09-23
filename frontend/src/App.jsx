@@ -13,6 +13,7 @@ import HighRiskTable from './components/HighRiskTable';
 import EarlyWarningBanner from './components/EarlyWarningBanner';
 import SimulationModal from './components/SimulationModal';
 import ShapExplanationModal from './components/ShapExplanationModal';
+import AiAssistantPanel from './components/AiAssistantPanel';
 import DisclaimerFooter from './components/DisclaimerFooter';
 import DataSourceTag from './components/DataSourceTag';
 
@@ -35,7 +36,8 @@ import {
   TrendingUp,
   AlertTriangle,
   Globe2,
-  ChevronRight
+  ChevronRight,
+  Sparkles
 } from 'lucide-react';
 
 export default function App() {
@@ -54,9 +56,24 @@ export default function App() {
   const [selectedDistrict, setSelectedDistrict] = useState('');
   const [selectedRiskTier, setSelectedRiskTier] = useState('');
 
-  // Modals state
+  // Modals and Drawer state
   const [isSimulationOpen, setIsSimulationOpen] = useState(false);
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
+  const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
+
+  // Global Keyboard Shortcuts (Ctrl/Cmd+K to toggle AI, Escape to close)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsAiAssistantOpen((prev) => !prev);
+      } else if (e.key === 'Escape' && isAiAssistantOpen) {
+        setIsAiAssistantOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [isAiAssistantOpen]);
 
   // Active request ref to prevent race conditions during rapid district switching
   const activeReqRef = useRef(0);
@@ -230,6 +247,7 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         unreadAlertCount={alerts.filter((a) => !a.is_read).length}
+        onOpenAssistant={() => setIsAiAssistantOpen(true)}
       />
 
       {/* Main Content Body */}
@@ -240,6 +258,7 @@ export default function App() {
           onSelectLocation={handleSelectLocation}
           unreadAlertCount={alerts.filter((a) => !a.is_read).length}
           onOpenAlerts={() => setActiveTab('alerts')}
+          onOpenAssistant={() => setIsAiAssistantOpen(true)}
         />
 
         <main className="flex-1 p-5 lg:p-6 space-y-5 max-w-[1600px] mx-auto w-full">
@@ -739,6 +758,14 @@ export default function App() {
         detailData={locationDetail}
         isOpen={isAnalysisOpen}
         onClose={() => setIsAnalysisOpen(false)}
+      />
+
+      {/* AI Weather & Hazard Assistant Slide-over Drawer */}
+      <AiAssistantPanel
+        isOpen={isAiAssistantOpen}
+        onClose={() => setIsAiAssistantOpen(false)}
+        selectedLocation={selectedLocation}
+        onSelectLocation={handleSelectLocation}
       />
     </div>
   );

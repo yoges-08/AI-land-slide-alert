@@ -149,3 +149,19 @@ class SatelliteInfoResponse(BaseModel):
     source: str
     last_updated: Optional[str] = None
     disclaimer: str
+
+
+class AssistantChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    current_location: Optional[Dict[str, Any]] = None
+    history: Optional[List[Dict[str, str]]] = Field(default_factory=list)
+
+
+class AssistantChatResponse(BaseModel):
+    reply: str
+    sources: List[str] = Field(default_factory=list)
+    tools_used: List[str] = Field(default_factory=list)
+    timestamp_ist: str
+    context_location: Optional[Dict[str, Any]] = None
+    advisory: str
+

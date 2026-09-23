@@ -325,3 +325,29 @@ export async function exportReport(locId) {
     return null;
   }
 }
+
+export async function sendAssistantChat(message, currentLocation = null, history = []) {
+  try {
+    const res = await fetch(`${API_BASE}/assistant/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        current_location: currentLocation,
+        history: history.map((h) => ({ role: h.role, content: h.content })),
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Assistant chat error:', err);
+    return {
+      reply: '⚠️ Unable to connect to LANDSAFE-NER Assistant backend. Please verify your connection or retry shortly.',
+      sources: ['Local Fallback'],
+      tools_used: [],
+      timestamp_ist: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }),
+      advisory: 'Advisory only. IMD, NDMA and NCS are the sole official warning authorities in India.',
+    };
+  }
+}
+

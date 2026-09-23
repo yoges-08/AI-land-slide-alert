@@ -8,15 +8,17 @@ import {
   History,
   FileText,
   Settings,
-  Mountain
+  Mountain,
+  Sparkles
 } from 'lucide-react';
 
-export default function Sidebar({ activeTab, setActiveTab, unreadAlertCount = 3 }) {
+export default function Sidebar({ activeTab, setActiveTab, unreadAlertCount = 3, onOpenAssistant }) {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'live-map', label: 'Live Map', icon: MapIcon },
     { id: 'risk-analysis', label: 'Risk Analysis', icon: LineChart },
     { id: 'weather', label: 'Weather & Forecast', icon: CloudSun },
+    { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, badgeText: 'Beta', isAction: true },
     { id: 'alerts', label: 'Alerts', icon: Bell, badge: unreadAlertCount },
     { id: 'history', label: 'Historical Data', icon: History },
     { id: 'reports', label: 'Reports', icon: FileText },
@@ -50,7 +52,13 @@ export default function Sidebar({ activeTab, setActiveTab, unreadAlertCount = 3 
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => {
+                if (item.id === 'ai-assistant' && onOpenAssistant) {
+                  onOpenAssistant();
+                } else {
+                  setActiveTab(item.id);
+                }
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all duration-150 ${
                 isActive
                   ? 'bg-emerald-700/80 text-white shadow-sm shadow-emerald-900/30'
@@ -58,12 +66,16 @@ export default function Sidebar({ activeTab, setActiveTab, unreadAlertCount = 3 
               }`}
             >
               <div className="flex items-center space-x-3">
-                <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-200' : 'text-slate-400'}`} />
+                <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-200' : item.id === 'ai-assistant' ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <span>{item.label}</span>
               </div>
               {item.badge ? (
                 <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
                   {item.badge}
+                </span>
+              ) : item.badgeText ? (
+                <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
+                  {item.badgeText}
                 </span>
               ) : null}
             </button>

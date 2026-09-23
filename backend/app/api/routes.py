@@ -600,3 +600,9 @@ async def trigger_source_ingestion(source_id: str):
     except Exception as ex:
         raise HTTPException(status_code=500, detail=str(ex))
 
+
+# --- AI Weather & Hazard Assistant -----------------------------------------
+from backend.app.api.assistant import router as assistant_router
+router.include_router(assistant_router)
+
+

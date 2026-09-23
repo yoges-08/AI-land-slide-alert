@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Bell, ChevronDown, UserCheck, AlertTriangle } from 'lucide-react';
+import { Search, Bell, ChevronDown, UserCheck, AlertTriangle, Sparkles } from 'lucide-react';
 
 export default function TopHeader({
   locations = [],
   selectedLocation,
   onSelectLocation,
   unreadAlertCount = 3,
-  onOpenAlerts
+  onOpenAlerts,
+  onOpenAssistant
 }) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -90,12 +91,25 @@ export default function TopHeader({
       </div>
 
       {/* Right Header Actions */}
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center space-x-3 sm:space-x-4">
+        {/* Ask AI Trigger Button */}
+        <button
+          onClick={onOpenAssistant}
+          className="flex items-center space-x-2 px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all group"
+          title="Open AI Weather & Hazard Assistant (Ctrl+K)"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-emerald-200 group-hover:scale-110 transition-transform fill-emerald-200/40" />
+          <span>Ask AI</span>
+          <span className="hidden sm:inline-block text-[10px] bg-emerald-800/60 text-emerald-100 px-1.5 py-0.5 rounded font-mono font-normal">
+            Ctrl+K
+          </span>
+        </button>
+
         {/* Research Prototype Advisory Badge */}
-        <div className="flex items-center space-x-1.5 px-3 py-1 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold" title="Academic research prototype. Official warnings are issued exclusively by IMD, NDMA, and NCS.">
+        <div className="hidden lg:flex items-center space-x-1.5 px-3 py-1 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold" title="Academic research prototype. Official warnings are issued exclusively by IMD, NDMA, and NCS.">
           <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-          <span className="hidden md:inline">RESEARCH PROTOTYPE — NOT FOR OPERATIONAL DISPATCH</span>
-          <span className="md:hidden">PROTOTYPE</span>
+          <span className="hidden xl:inline">RESEARCH PROTOTYPE — NOT FOR OPERATIONAL DISPATCH</span>
+          <span className="xl:hidden">PROTOTYPE</span>
         </div>
 
         {/* Notification Bell */}
