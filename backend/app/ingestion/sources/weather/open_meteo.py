@@ -65,6 +65,25 @@ class OpenMeteoSource(BaseSource):
             "forecast_days": 6,
         }
 
+        # Check if already in live weather cache to conserve quota and avoid 429
+        from backend.app.services.weather_service import fetch_live_weather
+        live = await fetch_live_weather(lat, lon)
+        if live.get("status") == "LIVE":
+            return {
+                "latitude": lat,
+                "longitude": lon,
+                "current": {
+                    "temperature_2m": live.get("temperature"),
+                    "relative_humidity_2m": live.get("humidity"),
+                    "precipitation": live.get("rainfall_1h"),
+                    "wind_speed_10m": live.get("wind_speed"),
+                },
+                "hourly": {
+                    "precipitation": [live.get("rainfall_1h", 0.0)],
+                },
+                "_meta": {"district_id": district_id, "lat": lat, "lon": lon},
+            }
+
         try:
             async with httpx.AsyncClient(timeout=settings.OPEN_METEO_TIMEOUT_S) as client:
                 response = await client.get(self.api_endpoint, params=params)
@@ -73,7 +92,7 @@ class OpenMeteoSource(BaseSource):
                     data["_meta"] = {"district_id": district_id, "lat": lat, "lon": lon}
                     return data
                 elif response.status_code == 429:
-                    raise RateLimitExceededError("Open-Meteo daily request quota or burst rate limit exceeded")
+                    raise RateLimitExceededError("Open-Meteo daily request quota or burst rate limit exceeded (429)")
                 else:
                     raise SourceFetchError(f"Open-Meteo returned HTTP {response.status_code}")
         except Exception as exc:

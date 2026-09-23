@@ -4,9 +4,10 @@ Ingests NASA Global Precipitation Measurement (GPM) Integrated Multi-satellitE
 Retrievals for GPM (IMERG) half-hourly Early and Late precipitation estimates
 on a 0.1° x 0.1° (~10 km) grid.
 """
+import base64
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 import httpx
 from sqlalchemy.orm import Session
@@ -28,7 +29,7 @@ class NasaGpmSource(BaseSource):
     provider = "NASA Earthdata / GSFC"
     cadence_minutes = 30
     licence = "NASA Open Data Policy (Free / Unrestricted)"
-    api_endpoint = os.getenv("NASA_GPM_API_ENDPOINT", "https://disc.gsfc.nasa.gov/api/data/GPM_3IMERGHH_07")
+    api_endpoint = os.getenv("NASA_GPM_API_ENDPOINT", "https://cmr.earthdata.nasa.gov/search/granules.json")
     max_retries = 3
     retry_backoff_base_s = 0.5
 
@@ -37,7 +38,7 @@ class NasaGpmSource(BaseSource):
         self.earthdata_token = getattr(settings, "EARTHDATA_TOKEN", "") or os.getenv("EARTHDATA_TOKEN", "")
 
     async def fetch(self, **kwargs) -> Dict[str, Any]:
-        """Fetch half-hourly IMERG data from NASA Earthdata / GES DISC."""
+        """Fetch half-hourly IMERG data from NASA Earthdata / GES DISC CMR API."""
         simulated_payload = kwargs.get("simulated_payload")
         if simulated_payload is not None:
             return simulated_payload
@@ -48,11 +49,18 @@ class NasaGpmSource(BaseSource):
         }
         if self.earthdata_token:
             headers["Authorization"] = f"Bearer {self.earthdata_token}"
+        elif os.getenv("EARTHDATA_USERNAME") and os.getenv("EARTHDATA_PASSWORD"):
+            username = os.getenv("EARTHDATA_USERNAME", "")
+            password = os.getenv("EARTHDATA_PASSWORD", "")
+            creds = base64.b64encode(f"{username}:{password}".encode()).decode()
+            headers["Authorization"] = f"Basic {creds}"
 
         params = kwargs.get("params", {
-            "product": "GPM_3IMERGHHE",  # Early Run Half-Hourly
-            "region": "INDIA",
-            "format": "json"
+            "collection_concept_id": "C2723754864-GES_DISC",
+            "temporal": f"{(datetime.now(timezone.utc) - timedelta(hours=6)).strftime('%Y-%m-%dT%H:%M:%SZ')},",
+            "bounding_box": "68,6,98,38",
+            "sort_key": "-start_date",
+            "page_size": 1,
         })
 
         try:

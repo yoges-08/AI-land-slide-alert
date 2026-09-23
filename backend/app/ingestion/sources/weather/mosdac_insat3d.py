@@ -28,7 +28,7 @@ class MosdacInsat3dSource(BaseSource):
     provider = "ISRO / SAC / MOSDAC"
     cadence_minutes = 30
     licence = "Open Government Data (OGD) / Research Non-Commercial"
-    api_endpoint = os.getenv("MOSDAC_API_ENDPOINT", "https://mosdac.gov.in/data/web/data_products_info/QPE")
+    api_endpoint = os.getenv("MOSDAC_API_ENDPOINT", "https://mosdac.gov.in/catalog/search")
     max_retries = 3
     retry_backoff_base_s = 0.5
 
@@ -46,6 +46,13 @@ class MosdacInsat3dSource(BaseSource):
         if simulated_payload is not None:
             return simulated_payload
 
+        # Guard: skip if no working auth token and no login credentials
+        if not self.auth_token and not (os.getenv("MOSDAC_USERNAME") and os.getenv("MOSDAC_PASSWORD")):
+            raise SourceFetchError(
+                "MOSDAC_AUTH_TOKEN is empty. Skipping fetch. "
+                "Login to mosdac.gov.in to obtain a bearer token."
+            )
+
         # Live network fetch
         headers = {
             "Accept": "application/json",
@@ -57,7 +64,7 @@ class MosdacInsat3dSource(BaseSource):
             try:
                 async with httpx.AsyncClient(timeout=10.0) as auth_client:
                     login_resp = await auth_client.post(
-                        "https://www.mosdac.gov.in/api/v1/auth/login",
+                        "https://mosdac.gov.in/api/v1/auth/login",
                         json={
                             "username": os.getenv("MOSDAC_USERNAME"),
                             "password": os.getenv("MOSDAC_PASSWORD"),
@@ -72,9 +79,13 @@ class MosdacInsat3dSource(BaseSource):
                 logger.debug("MOSDAC auto-login skipped: %s", exc)
 
         params = kwargs.get("params", {
-            "product": "3D_QPE",
-            "region": "INDIA",
-            "format": "json"
+            "satellite": "3DIMG",
+            "sensor": "IMAGER",
+            "product": "QPE",
+            "level": "L2",
+            "format": "json",
+            "limit": 1,
+            "sort": "-datetime",
         })
 
         try:
