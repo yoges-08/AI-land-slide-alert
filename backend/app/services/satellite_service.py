@@ -5,8 +5,7 @@ M4 ingestion: Added Copernicus Sentinel-2 L2A (NDVI & Bare Soil) and NASA FIRMS
 active fire ingestion via CDSE / NASA APIs when credentials are provided,
 with 30-minute in-memory caching and graceful fallback.
 """
-from __future__ import annotations
-
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -195,6 +194,121 @@ function evaluatePixel(sample) {
         return None
 
 
+async def _fetch_sentinel1_sar(lat: float, lon: float) -> Optional[Dict[str, Any]]:
+    """Fetch flood/snow/moisture indicators from Copernicus Sentinel-1 SAR via CDSE Statistics API."""
+    if not settings.CDSE_CLIENT_ID or not settings.CDSE_CLIENT_SECRET:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token_resp = await client.post(
+                "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": settings.CDSE_CLIENT_ID,
+                    "client_secret": settings.CDSE_CLIENT_SECRET,
+                }
+            )
+            if token_resp.status_code != 200:
+                return None
+            access_token = token_resp.json().get("access_token")
+            if not access_token:
+                return None
+
+            end_date = datetime.now(timezone.utc)
+            start_date = end_date - timedelta(days=14)
+            bbox_delta = 0.05
+
+            evalscript = """//VERSION=3
+function setup() {
+    return {
+        input: [{ bands: ["VV", "VH", "dataMask"] }],
+        output: [
+            { id: "default", bands: 3, sampleType: "FLOAT32" },
+            { id: "dataMask", bands: 1 }
+        ]
+    };
+}
+function evaluatePixel(sample) {
+    let vv_db = 10 * Math.log10(Math.max(sample.VV, 1e-10));
+    let vh_db = 10 * Math.log10(Math.max(sample.VH, 1e-10));
+    let ratio = sample.VH / Math.max(sample.VV, 1e-10);
+    return {
+        default: [vv_db, vh_db, ratio],
+        dataMask: [sample.dataMask]
+    };
+}"""
+
+            stat_payload = {
+                "input": {
+                    "bounds": {
+                        "bbox": [lon - bbox_delta, lat - bbox_delta, lon + bbox_delta, lat + bbox_delta],
+                        "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
+                    },
+                    "data": [{
+                        "type": "sentinel-1-grd",
+                        "dataFilter": {
+                            "timeRange": {
+                                "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                                "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                            },
+                            "acquisitionMode": "IW"
+                        }
+                    }]
+                },
+                "aggregation": {
+                    "timeRange": {
+                        "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                        "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                    },
+                    "aggregationInterval": {"of": "P14D"},
+                    "evalscript": evalscript
+                }
+            }
+
+            resp = await client.post(
+                "https://sh.dataspace.copernicus.eu/api/v1/statistics",
+                json=stat_payload,
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if resp.status_code != 200:
+                return None
+
+            result = resp.json()
+            intervals = result.get("data", [])
+            if not intervals:
+                return None
+
+            latest = intervals[-1]
+            outputs = latest.get("outputs", {}).get("default", {}).get("bands", {})
+            vv_stats = outputs.get("B0", {})
+            vh_stats = outputs.get("B1", {})
+
+            vv_mean = vv_stats.get("stats", {}).get("mean")
+            vh_mean = vh_stats.get("stats", {}).get("mean")
+
+            if vv_mean is None:
+                return None
+
+            flood_flag = vv_mean < -18.0
+            snow_pct = None
+            if vv_mean < -12.0 and vh_mean is not None and vh_mean < -22.0:
+                snow_pct = min(100.0, max(0.0, (-12.0 - vv_mean) * 15.0))
+
+            return {
+                "flood_extent_flag": flood_flag,
+                "snow_cover_pct": round(snow_pct, 1) if snow_pct is not None else None,
+                "snowmelt_rate": None,
+                "vv_backscatter_db": round(vv_mean, 2),
+                "vh_backscatter_db": round(vh_mean, 2) if vh_mean else None,
+                "source": "Copernicus Sentinel-1 GRD",
+                "observed_at": latest.get("interval", {}).get("to"),
+            }
+    except Exception as exc:
+        logger.debug("Sentinel-1 SAR query skipped: %s", exc)
+        return None
+
+
 async def _fetch_nasa_firms_fire(lat: float, lon: float) -> Optional[bool]:
     """Check for active fire hotspots near location from NASA FIRMS."""
     if not settings.NASA_FIRMS_MAP_KEY:
@@ -235,27 +349,46 @@ async def get_satellite_observation(location: dict) -> Dict[str, Any]:
         if (now_ts - cached_time) < SAT_CACHE_TTL_SECONDS:
             return cached_val
 
-    # Query live satellite providers if credentials configured
-    sentinel2 = await _fetch_sentinel2_indices(lat, lon)
-    fire = await _fetch_nasa_firms_fire(lat, lon)
+    # Query live satellite providers concurrently
+    sentinel2, sentinel1, fire = await asyncio.gather(
+        _fetch_sentinel2_indices(lat, lon),
+        _fetch_sentinel1_sar(lat, lon),
+        _fetch_nasa_firms_fire(lat, lon),
+        return_exceptions=True,
+    )
 
-    if sentinel2 or fire is not None:
+    if isinstance(sentinel2, Exception):
+        sentinel2 = None
+    if isinstance(sentinel1, Exception):
+        sentinel1 = None
+    if isinstance(fire, Exception):
+        fire = None
+
+    if sentinel2 or sentinel1 or fire is not None:
+        source_parts = []
+        if sentinel2:
+            source_parts.append("Sentinel-2 L2A")
+        if sentinel1:
+            source_parts.append("Sentinel-1 SAR")
+        if fire is not None:
+            source_parts.append("NASA FIRMS")
+
         result = {
             "data_status": {
-                "status": "FRESH" if sentinel2 else "RECENT",
-                "source": "copernicus_sentinel2" if sentinel2 else "nasa_firms",
-                "observed_at": (sentinel2 or {}).get("observed_at") or utcnow().isoformat(),
+                "status": "FRESH" if (sentinel2 or sentinel1) else "RECENT",
+                "source": "copernicus_sentinel" if (sentinel2 or sentinel1) else "nasa_firms",
+                "observed_at": (sentinel2 or sentinel1 or {}).get("observed_at") or utcnow().isoformat(),
             },
-            "status": "FRESH" if sentinel2 else "RECENT",
-            "source": (sentinel2 or {}).get("source", "Copernicus Sentinel-2 & NASA FIRMS"),
-            "snow_cover_pct": None,
-            "snowmelt_rate": None,
+            "status": "FRESH" if (sentinel2 or sentinel1) else "RECENT",
+            "source": f"Copernicus {(' + '.join(source_parts)) if source_parts else 'Sentinel'}",
+            "snow_cover_pct": (sentinel1 or {}).get("snow_cover_pct"),
+            "snowmelt_rate": (sentinel1 or {}).get("snowmelt_rate"),
             "bare_soil_pct": (sentinel2 or {}).get("bare_soil_pct"),
             "vegetation_index": (sentinel2 or {}).get("vegetation_index"),
             "farm_change_flag": None,
-            "flood_extent_flag": None,
+            "flood_extent_flag": (sentinel1 or {}).get("flood_extent_flag"),
             "fire_detected": fire,
-            "last_updated": (sentinel2 or {}).get("observed_at") or utcnow().isoformat(),
+            "last_updated": (sentinel2 or sentinel1 or {}).get("observed_at") or utcnow().isoformat(),
             "pending_sources": PENDING_INDEX_LAYERS,
         }
         _SAT_CACHE[cache_key] = (now_ts, result)

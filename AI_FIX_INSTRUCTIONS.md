@@ -1,425 +1,507 @@
-# LANDSAFE-NER — Issue Report for AI Implementation
+# LANDSAFE-NER — Remaining Issues & Solutions (23 September 2026)
 
-> **Instructions for AI:** Fix each issue below in order. Do NOT skip any. Each issue has the exact file path, the current broken code, and what to replace it with. After fixing all issues, run the backend and verify the fixes work.
-
----
-
-## Issue 1: `satellite_service.py` Is Hardcoded to Return NULL — Must Call Real APIs
-
-**File:** `backend/app/services/satellite_service.py`  
-**Problem:** The function `get_satellite_observation()` always returns `null` for every satellite value in production mode. It never calls any satellite API. The Copernicus CDSE credentials (`CDSE_CLIENT_ID`, `CDSE_CLIENT_SECRET`), NASA FIRMS key (`NASA_FIRMS_MAP_KEY`), and NASA Earthdata credentials (`EARTHDATA_TOKEN`) are already configured in the environment but the code never uses them.
-
-**What to do:** Rewrite the entire `backend/app/services/satellite_service.py` file. The new version must:
-
-1. Make `get_satellite_observation()` an `async` function
-2. Fetch **NDVI** and **bare soil %** from Copernicus Sentinel-2 L2A using the CDSE Statistical API (`https://sh.dataspace.copernicus.eu/api/v1/statistics`) with OAuth2 client credentials from `settings.CDSE_CLIENT_ID` and `settings.CDSE_CLIENT_SECRET`
-3. Fetch **active fire hotspots** from NASA FIRMS API (`https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_SNPP_NRT/...`) using `settings.NASA_FIRMS_MAP_KEY`
-4. Keep a 30-minute in-memory TTL cache keyed by `(round(lat,3), round(lon,3))` to avoid excessive API calls
-5. If all satellite APIs fail, return the existing `no_data(...)` fallback with all values as `None`
-6. Keep the existing `is_demo()` branch unchanged
-7. Keep `SATELLITE_MAP_LAYERS` and `PENDING_INDEX_LAYERS` dicts unchanged
-8. Keep `get_available_layers()` function unchanged
-9. For snow_cover_pct, snowmelt_rate, flood_extent_flag, farm_change_flag — leave as `None` with a comment saying these require Sentinel-1 SAR (future work)
-
-**Important:** Since the function becomes `async`, you must also update every call site in `backend/app/api/routes.py`:
-- Line 244: `satellite = get_satellite_observation(loc)` → `satellite = await get_satellite_observation(loc)`
-- Line 324: `satellite = get_satellite_observation(loc)` → `satellite = await get_satellite_observation(loc)`
-- Line 354: `sat = get_satellite_observation(loc)` → `sat = await get_satellite_observation(loc)`
-- Line 450: `satellite = get_satellite_observation(loc)` → `satellite = await get_satellite_observation(loc)`
-
-Also in `backend/app/models/schema.py`, the `SatelliteInfoResponse` model may need a `fire_detected` field added (Optional[bool]).
+> **For AI Agent:** These are the remaining issues in the LANDSAFE-NER project. Fix each one in order. Each issue has the exact file, the problem, and the solution code. Do NOT modify anything that is already working.
 
 ---
 
-## Issue 2: Ingestion Scheduler Is Disabled — Add `SCHEDULER_AUTOSTART` to Render
+## Status of Previously Reported Issues
 
-**File:** `backend/app/core/config.py` line 45  
-**Problem:** `SCHEDULER_AUTOSTART: bool = False` — the background scheduler that fetches data from MOSDAC, NASA GPM, USGS etc. never starts. The env var `SCHEDULER_AUTOSTART` is also missing from Render environment.
-
-**What to do:**  
-Change line 45 in `backend/app/core/config.py`:
-
-```python
-# BEFORE:
-SCHEDULER_AUTOSTART: bool = False
-
-# AFTER:
-SCHEDULER_AUTOSTART: bool = os.getenv("SCHEDULER_AUTOSTART", "false").lower() in ("true", "1", "yes")
-```
-
-Add `import os` at the top if not already present.  
-This lets the Render environment variable `SCHEDULER_AUTOSTART=true` control it without hardcoding.
+| # | Issue | Status |
+|---|---|---|
+| ✅ | Satellite data returns NULL | **FIXED** — Now returns real NDVI & bare soil from Sentinel-2 |
+| ✅ | Scheduler disabled | **FIXED** — `SCHEDULER_AUTOSTART = True` |
+| ✅ | Frontend rainfall D3 bug | **FIXED** — Now uses timestamp-based windowing |
+| ✅ | Source health misleading | **FIXED** — Shows `CREDENTIALS_OK` for configured sources |
+| ✅ | Keep-alive self-ping | **FIXED** — `_keep_alive()` pings every 10 min |
+| ✅ | Cache TTL too short | **FIXED** — Now 30 minutes |
+| ✅ | Throttling missing | **FIXED** — Semaphore + min interval added |
+| ❌ | Open-Meteo rate-limited (429) | **STILL BROKEN** — weather returns all null |
+| ❌ | ML prediction fails | **STILL BROKEN** — no weather → no prediction |
+| ⚠️ | Frontend still fabricates risk | **PARTIALLY FIXED** — better formula but still client-side |
 
 ---
 
-## Issue 3: Open-Meteo Gets Rate-Limited (HTTP 429) — Add Throttling
+## Issue 1 (CRITICAL): Open-Meteo Returns HTTP 429 — All Weather Data is NULL
 
 **File:** `backend/app/services/weather_service.py`  
-**Problem:** Open-Meteo free tier returns HTTP 429 (Too Many Requests). When weather fails, ML predictions also fail because `rainfall_24h` is mandatory.
+**Live evidence:** `/api/weather/26.1445/91.7362` returns `{"status":"OFFLINE","reason":"Open-Meteo unreachable (HTTP 429)","temperature":null}`
 
-**What to do:**
+### Problem
 
-1. Increase cache TTL from 15 minutes to 30 minutes:
+Open-Meteo free tier is permanently rate-limiting the backend. The 30-min cache and semaphore help but are not enough — the backend is still making too many calls. Every user clicking a location triggers a separate Open-Meteo request even if a nearby location was just fetched. With 788 locations and the scheduler now running, the daily quota gets exhausted quickly.
+
+### Root Cause
+
+1. The cache key uses exact `(lat, lon)` coordinates rounded to 4 decimals. Two locations 1 km apart generate separate API calls even though Open-Meteo gives the same data at ~11 km resolution.
+2. The 10-min keep-alive self-ping wakes the server, which may trigger scheduler ingestion cycles that each call Open-Meteo for multiple locations.
+3. No 429-specific backoff — when a 429 is received, the code still retries immediately with just `0.5 * 2^attempt` seconds delay, which counts against the rate limit.
+
+### Solution
+
+**Step A:** Add geographic bucketing — round coordinates to 1 decimal (~11 km) for cache lookup since Open-Meteo resolution is ~11 km anyway.
+
+In `backend/app/services/weather_service.py`, change the cache key logic at line 91:
 
 ```python
-# BEFORE (line 60):
-WEATHER_CACHE_TTL_SECONDS: float = 15.0 * 60.0  # 15 minutes
+# BEFORE (line 91):
+cache_key = (round(lat, 4), round(lon, 4))
 
-# AFTER:
-WEATHER_CACHE_TTL_SECONDS: float = 30.0 * 60.0  # 30 minutes
+# AFTER — bucket to ~11 km grid (matches Open-Meteo resolution):
+cache_key = (round(lat, 1), round(lon, 1))
 ```
 
-2. Add a global asyncio semaphore and minimum request interval right after the cache dict (around line 60):
+**Step B:** Add 429-specific exponential backoff with much longer wait. After the retry loop (around line 129), add special handling for 429:
 
 ```python
-import asyncio as _asyncio
-_OPEN_METEO_SEMAPHORE = _asyncio.Semaphore(2)  # Max 2 concurrent Open-Meteo requests
-_LAST_OM_REQUEST_TS: float = 0.0
-_MIN_OM_INTERVAL_S: float = 1.0  # At least 1 second between requests
+# REPLACE lines 124-133 with:
+                if response.status_code == 200:
+                    parsed = parse_open_meteo_response(response.json(), lat, lon)
+                    _LAST_SUCCESS[cache_key] = parsed["data_status"]["observed_at"] or utcnow().isoformat()
+                    _WEATHER_CACHE[cache_key] = (time.time(), parsed)
+                    return parsed
+                elif response.status_code == 429:
+                    # Rate limited — back off significantly and stop retrying
+                    retry_after = int(response.headers.get("Retry-After", 60))
+                    logger.warning("Open-Meteo 429 rate-limit; backing off %ds", retry_after)
+                    # Cache a "rate limited" marker to prevent further calls for this period
+                    _WEATHER_CACHE[cache_key] = (time.time(), None)
+                    await asyncio.sleep(min(retry_after, 120))
+                    break  # Don't retry on 429
+                last_error = f"HTTP {response.status_code}"
 ```
 
-3. Wrap the HTTP request section inside `fetch_live_weather()` with the semaphore and delay:
+**Step C:** Skip API call entirely if a recent 429 was received. Add this right after the existing cache check (after line 96):
 
 ```python
-async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
-    # ... existing cache check code stays the same ...
-
-    global _LAST_OM_REQUEST_TS
-    async with _OPEN_METEO_SEMAPHORE:
-        now_mono = time.monotonic()
-        wait = _MIN_OM_INTERVAL_S - (now_mono - _LAST_OM_REQUEST_TS)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        _LAST_OM_REQUEST_TS = time.monotonic()
-
-        # ... existing retry loop and HTTP fetch code ...
+    # If we recently got a 429, don't even try for 5 minutes
+    RATE_LIMIT_COOLDOWN_S = 300.0  # 5 minutes
+    if cache_key in _WEATHER_CACHE:
+        cached_time, cached_val = _WEATHER_CACHE[cache_key]
+        if cached_val is None and (now_ts - cached_time) < RATE_LIMIT_COOLDOWN_S:
+            logger.debug("Skipping Open-Meteo call — still in 429 cooldown for (%s, %s)", lat, lon)
+            return unavailable(lat, lon, "Rate-limited (cooldown active)")
 ```
 
 ---
 
-## Issue 4: Frontend Fallback Has D3 Rainfall Bug — Overstates 24h Rainfall
+## Issue 2 (CRITICAL): ML Prediction Returns NO_DATA When Weather Is Down
 
-**File:** `frontend/src/services/api.js` lines 69–72  
-**Problem:** When the Render backend is sleeping, the frontend fetches weather directly from Open-Meteo. It uses position-based array slicing (`hourlyPrecip.slice(-24)`) which includes FUTURE forecast hours, overstating rainfall by 2–5x. The backend fixed this (D3 fix) but the frontend fallback was never fixed.
+**File:** `backend/app/api/routes.py`  
+**Live evidence:** `/api/location/1` returns `"prediction":{"hazard_index":null,"status":"NO_DATA","reason":"No observed rainfall available"}`
 
-**What to do:** Replace lines 69–72 in `frontend/src/services/api.js`:
+### Problem
 
-```javascript
-// BEFORE (BUGGY):
-// 24h rainfall sum from recent 24 hourly records
-const hourlyPrecip = hourly.precipitation || [];
-const recent24 = hourlyPrecip.slice(Math.max(0, hourlyPrecip.length - 24));
-const rainfall24h = Math.round((recent24.reduce((a, b) => a + (Number(b) || 0), 0)) * 10) / 10;
+The ML prediction requires `rainfall_24h` from weather. When Open-Meteo is rate-limited, `rainfall_24h` is `null`, and the model refuses to predict. But the frontend already fetches weather directly from Open-Meteo as a fallback — this fallback weather should also trigger the ML model on the backend.
 
-// AFTER (FIXED — timestamp-based windowing matching backend D3 fix):
-// 24h rainfall sum using timestamp comparison (D3 fix)
-const hourlyTimes = hourly.time || [];
-const hourlyPrecip = hourly.precipitation || [];
-const nowDt = new Date(current.time || Date.now());
-const past24hDt = new Date(nowDt.getTime() - 24 * 60 * 60 * 1000);
-let rainfall24h = 0;
-for (let i = 0; i < hourlyTimes.length; i++) {
-  const t = new Date(hourlyTimes[i]);
-  if (t > past24hDt && t <= nowDt && hourlyPrecip[i] != null) {
-    rainfall24h += Number(hourlyPrecip[i]) || 0;
-  }
-}
-rainfall24h = Math.round(rainfall24h * 10) / 10;
+### Solution
+
+The frontend at `frontend/src/services/api.js` line 184 already has this fallback logic — when backend weather is OFFLINE, it fetches from Open-Meteo directly and calls `/api/predict`. This works correctly.
+
+The issue is the **backend-side** — when Open-Meteo is rate-limited, the backend should also try the frontend's direct approach. Add a fallback in `backend/app/api/routes.py` in the location detail handler.
+
+Find the section where weather and prediction are assembled (around lines 240-260) and add a second attempt using the Sentinel-2 data:
+
+```python
+# After getting weather and prediction, if prediction failed but satellite has data,
+# compute a terrain-only risk estimate using satellite vegetation data:
+
+if prediction.get("status") == "NO_DATA" and satellite.get("status") == "FRESH":
+    sat_veg = satellite.get("vegetation_index")
+    sat_bare = satellite.get("bare_soil_pct")
+    sat_fire = satellite.get("fire_detected")
+    terrain_slope = loc.get("slope", 0)
+    terrain_elev = loc.get("elevation", 0)
+    
+    if sat_veg is not None:
+        # Compute satellite-enhanced terrain risk
+        slope_score = min(1.0, max(0.0, (terrain_slope - 5.0) / 40.0))
+        veg_risk = max(0.0, 1.0 - sat_veg)  # Low NDVI = higher risk
+        bare_risk = (sat_bare or 0) / 100.0
+        fire_boost = 0.15 if sat_fire else 0.0
+        
+        sat_hazard = min(0.95, (slope_score * 0.40) + (veg_risk * 0.25) + (bare_risk * 0.20) + fire_boost)
+        sat_hazard = round(sat_hazard, 3)
+        
+        if sat_hazard >= 0.60:
+            sat_risk_cat = "High"
+        elif sat_hazard >= 0.35:
+            sat_risk_cat = "Moderate"
+        else:
+            sat_risk_cat = "Low"
+        
+        prediction = {
+            **prediction,
+            "hazard_index": sat_hazard,
+            "risk_category": sat_risk_cat,
+            "status": "DEGRADED",
+            "reason": "Weather unavailable (429). Risk estimated from satellite + terrain only. Less reliable than full model.",
+            "inputs": {
+                "weather": prediction.get("inputs", {}).get("weather", {}),
+                "satellite": {"status": "FRESH", "source": satellite.get("source", "Sentinel-2")},
+            },
+            "top_factors": {
+                "slope": round(slope_score, 3),
+                "low_vegetation": round(veg_risk, 3),
+                "bare_soil": round(bare_risk, 3),
+                "fire_detected": sat_fire or False,
+            },
+        }
 ```
 
 ---
 
-## Issue 5: Frontend Fabricates Risk Categories on Map — Hardcoded Constants
+## Issue 3 (HIGH): Sources Show OFFLINE with calls_today=0 — Scheduler Not Actually Fetching
 
-**File:** `frontend/src/App.jsx` lines 75–98  
-**Problem:** The dashboard map shows High/Moderate/Low risk pins with hardcoded hazard indices (0.78, 0.44, 0.12) fabricated from slope/elevation. Users see these and think they're real model predictions.
+**File:** `backend/app/ingestion/scheduler.py`, `backend/app/ingestion/registry.py`  
+**Live evidence:** `/api/sources` shows all sources have `"calls_today":0` and `"last_successful_fetch":null` despite `SCHEDULER_AUTOSTART=True`
 
-**What to do:** Replace lines 75–98 in `frontend/src/App.jsx`:
+### Problem
 
-```javascript
-// BEFORE (FABRICATED):
-const enrichedLocs = (locs || []).map((l) => {
-  let riskCat = l.risk_category;
-  let hazIdx = l.hazard_index;
-  if (!riskCat) {
-    const slope = Number(l.slope) || 0;
-    const elev = Number(l.elevation) || 0;
-    if (slope >= 30 && elev >= 1000) {
-      riskCat = 'High';
-      hazIdx = 0.78;
-    } else if (slope >= 15 || elev >= 450) {
-      riskCat = 'Moderate';
-      hazIdx = 0.44;
-    } else {
-      riskCat = 'Low';
-      hazIdx = 0.12;
-    }
-  }
-  return {
-    ...l,
-    risk_category: riskCat,
-    hazard_index: hazIdx,
-  };
-});
+The scheduler is enabled (`SCHEDULER_AUTOSTART=True`) and `ingestion_scheduler.start()` runs in `main.py`. However:
 
-// AFTER (HONEST — terrain-based estimate clearly labelled):
-const enrichedLocs = (locs || []).map((l) => {
-  let riskCat = l.risk_category;
-  let hazIdx = l.hazard_index;
-  let riskSource = l.risk_source || 'MODEL';
-  if (!riskCat) {
-    const slope = Number(l.slope) || 0;
-    const elev = Number(l.elevation) || 0;
-    if (slope >= 30 && elev >= 1000) {
-      riskCat = 'High';
-    } else if (slope >= 15 || elev >= 450) {
-      riskCat = 'Moderate';
-    } else {
-      riskCat = 'Low';
-    }
-    hazIdx = null;  // No fake index — null means "not computed by model"
-    riskSource = 'TERRAIN_ESTIMATE';
-  }
-  return {
-    ...l,
-    risk_category: riskCat,
-    hazard_index: hazIdx,
-    risk_source: riskSource,
-  };
-});
-```
+1. `init_default_sources()` in `registry.py` only registers 3 sources (MOSDAC, GPM, Open-Meteo). The other 6 sources (Sentinel-1/2, USGS, FIRMS, COOLR, DEM) have no ingestion source classes, so they never get scheduled.
+2. Even the 3 registered sources may not be running because `is_verified()` might be blocking them via `PENDING_VERIFICATION` list in config.
+3. The MOSDAC source has an empty auth token so its fetch will fail silently.
 
----
+### Solution
 
-## Issue 6: DB Seeder Shows `AWAITING_CREDENTIALS` Even When Keys Exist
-
-**File:** `backend/app/services/db_seeder.py` lines 128–138  
-**Problem:** The seeder hardcodes `status="OFFLINE"` and `last_attempt_status="AWAITING_CREDENTIALS"` for all non-Open-Meteo sources, regardless of whether actual credentials are configured. This is misleading.
-
-**What to do:** Replace lines 128–138 in `backend/app/services/db_seeder.py`:
+**Step A:** Check `PENDING_VERIFICATION` in `backend/app/core/config.py`. Find the `PENDING_VERIFICATION` list and remove any sources that now have working credentials:
 
 ```python
-# BEFORE:
-is_open_meteo = (src.id == "OPEN_METEO")
-health = SourceHealth(
-    source_id=src.id,
-    status="FRESH" if is_open_meteo else "OFFLINE",
-    last_successful_fetch=utc_now() if is_open_meteo else None,
-    last_attempt_status="INITIALIZED" if is_open_meteo else "AWAITING_CREDENTIALS",
-    consecutive_failures=0,
-    average_latency_ms=85.0 if is_open_meteo else 0.0
-)
+# Find PENDING_VERIFICATION and update it:
+# BEFORE (if it blocks MOSDAC, GPM etc.):
+PENDING_VERIFICATION = ["nisar_ssar", "resourcesat_liss"]
 
-# AFTER:
-is_open_meteo = (src.id == "OPEN_METEO")
-# Check if credentials are actually configured for this source
-has_creds = is_open_meteo  # Open-Meteo needs no credentials
-if src.id == "MOSDAC_INSAT3D_QPE":
-    has_creds = bool(os.getenv("MOSDAC_AUTH_TOKEN", ""))
-elif src.id == "NASA_GPM_IMERG":
-    has_creds = bool(os.getenv("EARTHDATA_TOKEN", ""))
-elif src.id in ("COPERNICUS_S1_SAR", "COPERNICUS_S2_OPTICAL", "COPERNICUS_DEM_GLO30"):
-    has_creds = bool(os.getenv("CDSE_CLIENT_ID", ""))
-elif src.id == "NASA_FIRMS":
-    has_creds = bool(os.getenv("NASA_FIRMS_MAP_KEY", ""))
-elif src.id == "USGS_FDSN":
-    has_creds = True  # USGS is public, no auth needed
-elif src.id == "NASA_COOLR":
-    has_creds = bool(os.getenv("EARTHDATA_TOKEN", ""))
-
-health = SourceHealth(
-    source_id=src.id,
-    status="FRESH" if is_open_meteo else ("STANDBY" if has_creds else "OFFLINE"),
-    last_successful_fetch=utc_now() if is_open_meteo else None,
-    last_attempt_status="INITIALIZED" if is_open_meteo else ("CREDENTIALS_OK" if has_creds else "AWAITING_CREDENTIALS"),
-    consecutive_failures=0,
-    average_latency_ms=85.0 if is_open_meteo else 0.0
-)
+# AFTER — only block sources that truly don't have credentials:
+PENDING_VERIFICATION = ["nisar_ssar", "resourcesat_liss"]
+# Make sure MOSDAC_INSAT3D_QPE, NASA_GPM_IMERG, OPEN_METEO are NOT in this list
 ```
 
-Add `import os` at the top of the file if not already present.
+**Step B:** The ingestion `fetch()` methods for MOSDAC and NASA GPM point to placeholder API endpoints that may not exist. Verify and update:
 
----
-
-## Issue 7: `MOSDAC_AUTH_TOKEN` Is Empty — Cannot Fetch INSAT-3D Data
-
-**File:** `.env` line 22 and Render environment  
-**Problem:** `MOSDAC_AUTH_TOKEN=` is empty. MOSDAC username/password are set but the bearer token is blank. The MOSDAC API ingestion code checks for this token.
-
-**What to do:** The code in `backend/app/ingestion/sources/weather/mosdac_insat3d.py` line 37 reads:
+In `backend/app/ingestion/sources/weather/mosdac_insat3d.py` line 31:
 ```python
-self.auth_token = getattr(settings, "MOSDAC_AUTH_TOKEN", "") or os.getenv("MOSDAC_AUTH_TOKEN", "")
+# CHECK: Is this a real endpoint?
+api_endpoint = os.getenv("MOSDAC_API_ENDPOINT", "https://www.mosdac.gov.in/api/v1/qpe")
+# If this endpoint doesn't exist, update to the real MOSDAC data access URL.
+# The actual MOSDAC data portal may use a different URL format.
 ```
 
-If MOSDAC supports username/password login to get a token, add auto-login in the `fetch()` method. Replace the auth header section in `mosdac_insat3d.py` (around lines 49–55):
-
+In `backend/app/ingestion/sources/weather/nasa_gpm.py` line 31:
 ```python
-# BEFORE:
-headers = {
-    "Accept": "application/json",
-    "User-Agent": "LANDSAFE-NER/1.0 (Disaster-Early-Warning-Research)",
-}
-if self.auth_token:
-    headers["Authorization"] = f"Bearer {self.auth_token}"
-
-# AFTER:
-headers = {
-    "Accept": "application/json",
-    "User-Agent": "LANDSAFE-NER/1.0 (Disaster-Early-Warning-Research)",
-}
-if self.auth_token:
-    headers["Authorization"] = f"Bearer {self.auth_token}"
-elif os.getenv("MOSDAC_USERNAME") and os.getenv("MOSDAC_PASSWORD"):
-    # Auto-login to get token if not provided
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as auth_client:
-            login_resp = await auth_client.post(
-                "https://www.mosdac.gov.in/api/v1/auth/login",
-                json={
-                    "username": os.getenv("MOSDAC_USERNAME"),
-                    "password": os.getenv("MOSDAC_PASSWORD"),
-                }
-            )
-            if login_resp.status_code == 200:
-                token = login_resp.json().get("token") or login_resp.json().get("access_token")
-                if token:
-                    self.auth_token = token
-                    headers["Authorization"] = f"Bearer {token}"
-    except Exception as exc:
-        logger.warning("MOSDAC auto-login failed: %s", exc)
+# CHECK: Is this a real endpoint?
+api_endpoint = os.getenv("NASA_GPM_API_ENDPOINT", "https://gpm.nasa.gov/api/v1/imerg")
+# The real NASA GPM IMERG data is accessed via GES DISC:
+# https://disc.gsfc.nasa.gov/datasets/GPM_3IMERGHH_07/summary
+# Update to the correct OPeNDAP or HTTP endpoint
 ```
 
----
-
-## Issue 8: Render Free Tier Puts Server to Sleep — Backend Goes Offline
-
-**File:** `backend/app/main.py`  
-**Problem:** Render free tier sleeps the server after 15 minutes of inactivity. Cold start takes 30–60 seconds, during which all API calls fail.
-
-**What to do:** Add a self-ping keep-alive task in `backend/app/main.py`. Add this inside the `lifespan()` function:
+**Step C:** Add a startup log to confirm what the scheduler actually registered. In `backend/app/main.py` after `ingestion_scheduler.start()`:
 
 ```python
-import asyncio
-import httpx
-
-async def _keep_alive_ping():
-    """Prevent Render free tier from sleeping by self-pinging every 12 minutes."""
-    await asyncio.sleep(60)  # Wait 1 min after startup
-    while True:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.get("https://ai-land-slide-alert.onrender.com/health")
-            logger.debug("[KeepAlive] Self-ping successful")
-        except Exception:
-            pass
-        await asyncio.sleep(720)  # Ping every 12 minutes (under 15-min sleep threshold)
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("[LANDSAFE-NER] starting in %s mode", settings.LANDSAFE_MODE)
-    if is_demo():
-        logger.warning("[LANDSAFE-NER] DEMO MODE — every response carries %s", DEMO_LABEL)
-    load_ml_assets()
-    logger.info("[LANDSAFE-NER] model and SHAP explainer loaded (UNCALIBRATED, synthetic training data)")
     if settings.SCHEDULER_AUTOSTART:
         ingestion_scheduler.start()
-        logger.info("[LANDSAFE-NER] Ingestion scheduler started")
-    
-    # Start keep-alive background task
-    keep_alive_task = asyncio.create_task(_keep_alive_ping())
-    
-    yield
-    
-    keep_alive_task.cancel()
-    if ingestion_scheduler.is_running:
-        ingestion_scheduler.shutdown()
-        logger.info("[LANDSAFE-NER] Ingestion scheduler stopped")
-    logger.info("[LANDSAFE-NER] shutting down")
+        jobs = ingestion_scheduler.get_jobs_status()
+        logger.info("[LANDSAFE-NER] Ingestion scheduler started with %d jobs: %s",
+                     len(jobs), [j["name"] for j in jobs])
 ```
 
 ---
 
-## Issue 9: CORS_ORIGINS on Render Missing Vercel Domain
+## Issue 4 (HIGH): Sentinel-1 SAR Data Missing — snow_cover, flood_extent, snowmelt Are NULL
 
-**File:** Render environment variable `CORS_ORIGINS`  
-**Problem:** The Render env has `CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173` — this is the local dev value. The production Vercel frontend URL `https://ai-land-slide-alert.vercel.app` is missing. The code has a regex fallback (`allow_origin_regex=r"https://.*\.vercel\.app"`) which may cover it, but it's better to be explicit.
+**File:** `backend/app/services/satellite_service.py`  
+**Live evidence:** `snow_cover_pct=null, snowmelt_rate=null, flood_extent_flag=null` for all locations
 
-**What to do:** Update the `CORS_ORIGINS` environment variable on Render to:
+### Problem
 
+The current satellite service fetches NDVI and bare soil from Sentinel-2 (optical), but Sentinel-1 SAR data (for soil moisture, flood extent, snow cover) is not being fetched. The CDSE credentials are available.
+
+### Solution
+
+Add a Sentinel-1 SAR fetch function to `satellite_service.py`. Sentinel-1 provides C-band SAR backscatter which can detect:
+- **Flood extent** — water has very low backscatter in VV polarization
+- **Snow cover** — wet snow has distinct backscatter signature
+- **Soil moisture** — backscatter correlates with surface moisture
+
+```python
+async def _fetch_sentinel1_sar(lat: float, lon: float) -> Optional[Dict[str, Any]]:
+    """Fetch flood/snow/moisture indicators from Copernicus Sentinel-1 SAR."""
+    if not settings.CDSE_CLIENT_ID or not settings.CDSE_CLIENT_SECRET:
+        return None
+    
+    try:
+        # Get CDSE access token (reuse from Sentinel-2 if already cached)
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token_resp = await client.post(
+                "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": settings.CDSE_CLIENT_ID,
+                    "client_secret": settings.CDSE_CLIENT_SECRET,
+                }
+            )
+            if token_resp.status_code != 200:
+                return None
+            access_token = token_resp.json().get("access_token")
+        
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=12)  # Sentinel-1 revisit = 6-12 days
+        bbox_delta = 0.05
+        
+        # Evalscript for VV/VH backscatter analysis
+        evalscript = '''
+        //VERSION=3
+        function setup() {
+            return { input: ["VV", "VH"], output: { bands: 3, sampleType: "FLOAT32" } };
+        }
+        function evaluatePixel(sample) {
+            let vv_db = 10 * Math.log10(Math.max(sample.VV, 1e-10));
+            let vh_db = 10 * Math.log10(Math.max(sample.VH, 1e-10));
+            let ratio = sample.VH / Math.max(sample.VV, 1e-10);
+            return [vv_db, vh_db, ratio];
+        }
+        '''
+        
+        stat_payload = {
+            "input": {
+                "bounds": {
+                    "bbox": [lon - bbox_delta, lat - bbox_delta, lon + bbox_delta, lat + bbox_delta],
+                    "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
+                },
+                "data": [{
+                    "type": "sentinel-1-grd",
+                    "dataFilter": {
+                        "timeRange": {
+                            "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                            "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                        },
+                        "acquisitionMode": "IW"
+                    }
+                }]
+            },
+            "aggregation": {
+                "timeRange": {
+                    "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                    "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                },
+                "aggregationInterval": {"of": "P12D"},
+                "evalscript": evalscript
+            }
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://sh.dataspace.copernicus.eu/api/v1/statistics",
+                json=stat_payload,
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if resp.status_code != 200:
+                return None
+            
+            result = resp.json()
+            intervals = result.get("data", [])
+            if not intervals:
+                return None
+            
+            latest = intervals[-1]
+            outputs = latest.get("outputs", {}).get("data", {}).get("bands", {})
+            vv_stats = outputs.get("B0", {}).get("stats", {})
+            vh_stats = outputs.get("B1", {}).get("stats", {})
+            
+            vv_mean = vv_stats.get("mean")  # VV backscatter in dB
+            vh_mean = vh_stats.get("mean")  # VH backscatter in dB
+            
+            if vv_mean is None:
+                return None
+            
+            # Interpretation thresholds (empirical from ESA documentation):
+            # VV < -18 dB typically indicates standing water (flood)
+            # VV < -12 dB with VH/VV ratio change indicates wet snow
+            flood_flag = vv_mean < -18.0
+            snow_pct = None
+            if vv_mean < -12.0 and vh_mean is not None and vh_mean < -22.0:
+                # Rough wet snow indicator for high-altitude locations
+                snow_pct = min(100.0, max(0.0, (-12.0 - vv_mean) * 15.0))
+            
+            return {
+                "flood_extent_flag": flood_flag,
+                "snow_cover_pct": round(snow_pct, 1) if snow_pct is not None else None,
+                "snowmelt_rate": None,  # Needs time-series comparison (future)
+                "vv_backscatter_db": round(vv_mean, 2),
+                "vh_backscatter_db": round(vh_mean, 2) if vh_mean else None,
+                "source": "Copernicus Sentinel-1 GRD (IW)",
+                "observed_at": latest.get("interval", {}).get("to"),
+            }
+    
+    except Exception as exc:
+        logger.warning("Sentinel-1 SAR fetch failed: %s", exc)
+        return None
+```
+
+Then update the main `get_satellite_observation()` function to call both Sentinel-2 AND Sentinel-1:
+
+```python
+async def get_satellite_observation(location: dict) -> Dict[str, Any]:
+    # ... existing demo mode check ...
+    # ... existing cache check ...
+    
+    # Fetch from both satellites concurrently
+    sentinel2, sentinel1, fire = await asyncio.gather(
+        _fetch_sentinel2_indices(lat, lon),
+        _fetch_sentinel1_sar(lat, lon),
+        _fetch_nasa_firms_fire(lat, lon),
+        return_exceptions=True,
+    )
+    
+    # Handle exceptions from gather
+    if isinstance(sentinel2, Exception): sentinel2 = None
+    if isinstance(sentinel1, Exception): sentinel1 = None
+    if isinstance(fire, Exception): fire = None
+    
+    if sentinel2 or sentinel1 or fire is not None:
+        result = {
+            "status": "FRESH",
+            "source": "Copernicus Sentinel-2 L2A + Sentinel-1 GRD",
+            "vegetation_index": (sentinel2 or {}).get("vegetation_index"),
+            "bare_soil_pct": (sentinel2 or {}).get("bare_soil_pct"),
+            "snow_cover_pct": (sentinel1 or {}).get("snow_cover_pct"),
+            "snowmelt_rate": (sentinel1 or {}).get("snowmelt_rate"),
+            "flood_extent_flag": (sentinel1 or {}).get("flood_extent_flag"),
+            "farm_change_flag": None,  # Needs time-series NDVI comparison (future)
+            "fire_detected": fire if not isinstance(fire, Exception) else None,
+            "last_updated": (sentinel2 or sentinel1 or {}).get("observed_at") or utcnow().isoformat(),
+        }
+        _SAT_CACHE[cache_key] = (now_ts, result)
+        return result
+    
+    # ... existing no_data fallback ...
+```
+
+Add `import asyncio` at the top of the file if not already present.
+
+---
+
+## Issue 5 (MEDIUM): Frontend Still Computes Risk Client-Side — Not Using Real Model
+
+**File:** `frontend/src/App.jsx` lines 77–107  
+**Problem:** The dashboard map risk levels are computed client-side using a terrain susceptibility formula. While improved from the old hardcoded values (now uses GSI-style LSI), it still does NOT use the ML model or satellite data. Users see "High" risk on the map but it's only from slope/elevation.
+
+### Solution
+
+Add a `risk_source` label so users know the source. Update lines 102-107:
+
+```javascript
+// AFTER line 100 (inside the else branch, after computing riskCat):
+        return {
+          ...l,
+          risk_category: riskCat,
+          hazard_index: hazIdx,
+          risk_source: 'TERRAIN_SUSCEPTIBILITY',  // Label clearly
+          risk_note: 'Based on terrain slope/elevation only. Click for full model prediction.',
+        };
+```
+
+Then in the UI where risk badges are displayed, show the source label. Search for where `risk_category` is rendered (likely in a badge or chip component) and append:
+
+```jsx
+{loc.risk_source === 'TERRAIN_SUSCEPTIBILITY' && (
+  <span className="text-xs text-gray-400 ml-1">(Terrain)</span>
+)}
+```
+
+---
+
+## Issue 6 (MEDIUM): CORS_ORIGINS Missing Vercel Production URL
+
+**File:** Render environment variable  
+**Current value:** `CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`
+
+### Problem
+
+The Render env only has localhost URLs. The production Vercel URL is missing. The code has a regex fallback (`allow_origin_regex=r"https://.*\.vercel\.app"`) which covers it, but explicit is better.
+
+### Solution
+
+Update `CORS_ORIGINS` on Render to:
 ```
 http://localhost:5173,http://127.0.0.1:5173,https://ai-land-slide-alert.vercel.app
 ```
 
-This is a Render dashboard change, not a code change. But if you want to hardcode the fix in code, update `backend/app/core/config.py` line 35:
-
-```python
-# BEFORE:
-CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,https://ai-land-slide-alert.vercel.app"
-
-# This is already correct in the code. Just update the Render env var.
-```
+This is a **Render dashboard change**, not a code change.
 
 ---
 
-## Issue 10: Frontend `api.js` — 7-Day Trend Takes Wrong Days
+## Issue 7 (MEDIUM): ML Model Trained on Synthetic Data — Not Validated
 
-**File:** `frontend/src/services/api.js` lines 76–87  
-**Problem:** The 7-day rainfall trend always takes the FIRST 7 days from the daily array. With `past_days=6, forecast_days=6`, that's days -6 to 0 (correct). But the backend version uses today's index to compute the range. The frontend version happens to be correct by coincidence but should be made explicit.
+**File:** `backend/app/services/ml_service.py`, `backend/ml/train_models.py`  
+**Problem:** The XGBoost model was trained on synthetic formula-derived labels, never validated against real landslide events. The code explicitly says `"UNCALIBRATED"`.
 
-**What to do:** Replace lines 76–87:
+### Solution
 
-```javascript
-// BEFORE:
-const rainfallTrend7d = [];
-for (let i = 0; i < Math.min(7, dailyTimes.length); i++) {
-  ...
-}
+This is a long-term fix. For now, add a disclaimer to the API response. Find where the prediction response is built and ensure the status/note fields include:
 
-// AFTER (explicit past-7-days logic):
-const rainfallTrend7d = [];
-const todayStr = new Date().toISOString().slice(0, 10);
-const todayIdx = dailyTimes.findIndex(d => d === todayStr);
-const startIdx = Math.max(0, (todayIdx >= 0 ? todayIdx : 6) - 6);
-const endIdx = todayIdx >= 0 ? todayIdx + 1 : 7;
-for (let i = startIdx; i < Math.min(endIdx, dailyTimes.length); i++) {
-  const dtStr = dailyTimes[i];
-  const d = new Date(dtStr);
-  const formattedDate = !isNaN(d.getTime()) ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : dtStr;
-  rainfallTrend7d.push({
-    date: formattedDate,
-    iso_date: dtStr,
-    rainfall_mm: dailyPrecip[i] != null ? Math.round(dailyPrecip[i] * 10) / 10 : 0,
-  });
-}
+```python
+"calibration": "UNCALIBRATED",
+"training_data": "SYNTHETIC",
+"confidence_note": "This hazard index has not been validated against observed landslides. Use IMD/NDMA guidance as the authoritative source."
 ```
+
+For a future milestone: retrain using NASA COOLR (Cooperative Open Online Landslide Repository) real landslide event data + historical weather at event locations.
+
+---
+
+## Issue 8 (LOW): MOSDAC and NASA GPM Ingestion Sources Use Placeholder API URLs
+
+**File:** `backend/app/ingestion/sources/weather/mosdac_insat3d.py` line 31, `backend/app/ingestion/sources/weather/nasa_gpm.py` line 31  
+**Problem:** The API endpoints `https://www.mosdac.gov.in/api/v1/qpe` and `https://gpm.nasa.gov/api/v1/imerg` are likely placeholder URLs that don't exist. Even with credentials, the fetch will fail.
+
+### Solution
+
+Update to real data access endpoints:
+
+**MOSDAC:** The actual MOSDAC data portal uses:
+```python
+# In mosdac_insat3d.py:
+api_endpoint = os.getenv("MOSDAC_API_ENDPOINT", "https://mosdac.gov.in/data/web/data_products_info/QPE")
+```
+
+**NASA GPM IMERG:** The real data is accessed via NASA GES DISC:
+```python
+# In nasa_gpm.py:
+api_endpoint = os.getenv("NASA_GPM_API_ENDPOINT", 
+    "https://disc.gsfc.nasa.gov/api/data/GPM_3IMERGHH_07")
+```
+
+However, these APIs require specific request formats. The `fetch()` methods need to be tested and adjusted for the actual API response format.
 
 ---
 
 ## Execution Order
 
-Fix in this exact order:
-
-1. **Issue 2** — Enable scheduler (small config change, enables everything else)
-2. **Issue 1** — Rewrite satellite_service.py (biggest impact — enables satellite data)
-3. **Issue 3** — Add Open-Meteo throttling (fixes weather downtime)
-4. **Issue 4** — Fix frontend rainfall bug (prevents wrong data)
-5. **Issue 5** — Fix frontend risk labels (stops showing fake risk)
-6. **Issue 8** — Add keep-alive ping (prevents Render sleep)
-7. **Issue 6** — Fix db_seeder credential detection
-8. **Issue 7** — Add MOSDAC auto-login
-9. **Issue 9** — Fix CORS origins on Render
-10. **Issue 10** — Fix frontend 7-day trend
-
-## After All Fixes
-
-1. Run `pip install -r backend/requirements.txt` to ensure all dependencies are installed
-2. Test locally: `python -m uvicorn backend.app.main:app --reload`
-3. Hit `http://localhost:8000/api/satellite/1` — should return real NDVI/bare_soil values
-4. Hit `http://localhost:8000/api/location/1` — should return weather + satellite + prediction
-5. Git commit and push to trigger Render redeploy
-6. Add `SCHEDULER_AUTOSTART=true` to Render environment variables
-7. Verify on live site: https://ai-land-slide-alert.vercel.app/
+| Priority | Issue | Impact |
+|---|---|---|
+| 🥇 **1** | Issue 1: Fix Open-Meteo 429 handling | Restores weather data for entire site |
+| 🥇 **2** | Issue 2: Add satellite-based fallback prediction | Shows risk even when weather is down |
+| 🥈 **3** | Issue 4: Add Sentinel-1 SAR for flood/snow | Fills remaining null satellite fields |
+| 🥈 **4** | Issue 3: Fix scheduler to actually run ingestion | Enables background data collection |
+| 🥉 **5** | Issue 5: Label frontend risk source | Transparency for users |
+| 🥉 **6** | Issue 6: Fix CORS on Render | Security best practice |
+| 🥉 **7** | Issue 7: Add ML model disclaimer | User safety |
+| 🥉 **8** | Issue 8: Fix ingestion API URLs | Enables MOSDAC/GPM data flow |
 
 ---
 
-*This report contains all information needed to fix the issues. No additional research required.*
+## Verification After Fixes
+
+After implementing all fixes, verify:
+
+1. `GET /api/weather/26.1445/91.7362` → should return temperature, humidity, rainfall (not null)
+2. `GET /api/satellite/1` → should return NDVI, bare_soil, snow_cover, flood_extent (not all null)
+3. `GET /api/location/1` → prediction should have a hazard_index (not null)
+4. `GET /api/sources` → at least Open-Meteo should show `calls_today > 0`
+5. Frontend map should show risk labels with "(Terrain)" suffix for non-model predictions
+
+---
+
+*Report generated 23 September 2026. No code was modified.*

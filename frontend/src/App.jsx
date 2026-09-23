@@ -103,6 +103,8 @@ export default function App() {
           ...l,
           risk_category: riskCat,
           hazard_index: hazIdx,
+          risk_source: l.risk_category ? (l.risk_source || 'LIVE_MODEL') : 'TERRAIN_SUSCEPTIBILITY',
+          risk_note: l.risk_category ? 'Model prediction' : 'Based on terrain slope/elevation only. Click for live prediction.',
         };
       });
 
@@ -152,6 +154,8 @@ export default function App() {
           fire_detected: detail.satellite?.fire_detected ?? prev?.fire_detected,
           hazard_index: detail.prediction?.hazard_index ?? prev?.hazard_index,
           risk_category: detail.prediction?.risk_category ?? prev?.risk_category,
+          risk_source: detail.prediction?.status === 'DEGRADED' ? 'DEGRADED_SATELLITE' : (detail.prediction?.hazard_index != null ? 'LIVE_MODEL' : prev?.risk_source),
+          risk_note: detail.prediction?.reason || (detail.prediction?.hazard_index != null ? 'Model prediction' : prev?.risk_note),
         }));
       }
     }

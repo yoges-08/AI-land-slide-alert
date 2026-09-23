@@ -35,7 +35,9 @@ async def lifespan(app: FastAPI):
     logger.info("[LANDSAFE-NER] model and SHAP explainer loaded (UNCALIBRATED, synthetic training data)")
     if settings.SCHEDULER_AUTOSTART:
         ingestion_scheduler.start()
-        logger.info("[LANDSAFE-NER] Ingestion scheduler started")
+        jobs = ingestion_scheduler.get_jobs_status()
+        logger.info("[LANDSAFE-NER] Ingestion scheduler started with %d jobs: %s",
+                    len(jobs), [j.get("name") or j.get("id") for j in jobs])
 
     keep_alive_task = asyncio.create_task(_keep_alive())
     yield

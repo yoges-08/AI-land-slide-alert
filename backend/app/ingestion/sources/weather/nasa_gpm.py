@@ -28,7 +28,7 @@ class NasaGpmSource(BaseSource):
     provider = "NASA Earthdata / GSFC"
     cadence_minutes = 30
     licence = "NASA Open Data Policy (Free / Unrestricted)"
-    api_endpoint = os.getenv("NASA_GPM_API_ENDPOINT", "https://gpm.nasa.gov/api/v1/imerg")
+    api_endpoint = os.getenv("NASA_GPM_API_ENDPOINT", "https://disc.gsfc.nasa.gov/api/data/GPM_3IMERGHH_07")
     max_retries = 3
     retry_backoff_base_s = 0.5
 

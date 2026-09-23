@@ -102,8 +102,16 @@ export default function LocationDetails({
               <div>
                 <span className="text-xs font-bold text-red-700 block leading-tight">
                   {category.includes('Risk') ? category : `${category} Risk`}
+                  {location.risk_source === 'TERRAIN_SUSCEPTIBILITY' && (
+                    <span className="text-[10px] text-amber-700 font-normal ml-1 bg-amber-100/80 px-1 py-0.5 rounded">(Terrain)</span>
+                  )}
+                  {location.risk_source === 'DEGRADED_SATELLITE' && (
+                    <span className="text-[10px] text-purple-700 font-normal ml-1 bg-purple-100/80 px-1 py-0.5 rounded">(Satellite Degraded)</span>
+                  )}
                 </span>
-                <span className="text-[10px] text-red-600/80 font-medium">Hazard Index</span>
+                <span className="text-[10px] text-red-600/80 font-medium">
+                  {location.risk_source === 'TERRAIN_SUSCEPTIBILITY' ? 'Terrain Susceptibility' : location.risk_source === 'DEGRADED_SATELLITE' ? 'Satellite + Terrain' : 'Hazard Index'}
+                </span>
               </div>
             </div>
             <div className="text-right">

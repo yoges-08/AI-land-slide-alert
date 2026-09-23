@@ -246,6 +246,47 @@ async def get_location_detail(loc_id: int):
     features = _features_from(loc, weather, satellite)
     prediction = predict_risk(features) if features else _unavailable_prediction(weather, satellite)
 
+    if prediction.get("status") == "NO_DATA" and satellite.get("status") == "FRESH":
+        sat_veg = satellite.get("vegetation_index")
+        sat_bare = satellite.get("bare_soil_pct")
+        sat_fire = satellite.get("fire_detected")
+        terrain_slope = loc.get("slope", 0)
+        terrain_elev = loc.get("elevation", 0)
+
+        if sat_veg is not None:
+            slope_score = min(1.0, max(0.0, (terrain_slope - 5.0) / 40.0))
+            veg_risk = max(0.0, 1.0 - sat_veg)
+            bare_risk = (sat_bare or 0) / 100.0
+            fire_boost = 0.15 if sat_fire else 0.0
+
+            sat_hazard = min(0.95, (slope_score * 0.40) + (veg_risk * 0.25) + (bare_risk * 0.20) + fire_boost)
+            sat_hazard = round(sat_hazard, 3)
+
+            if sat_hazard >= 0.60:
+                sat_risk_cat = "High"
+            elif sat_hazard >= 0.35:
+                sat_risk_cat = "Moderate"
+            else:
+                sat_risk_cat = "Low"
+
+            prediction = {
+                **prediction,
+                "hazard_index": sat_hazard,
+                "risk_category": sat_risk_cat,
+                "status": "DEGRADED",
+                "reason": "Weather unavailable (429/offline). Risk estimated from satellite + terrain only.",
+                "inputs": {
+                    "weather": prediction.get("inputs", {}).get("weather", {}),
+                    "satellite": {"status": "FRESH", "source": satellite.get("source", "Sentinel-2")},
+                },
+                "top_factors": {
+                    "slope": round(slope_score, 3),
+                    "low_vegetation": round(veg_risk, 3),
+                    "bare_soil": round(bare_risk, 3),
+                    "fire_detected": sat_fire or False,
+                },
+            }
+
     return _envelope({
         "location": loc,
         "weather": weather,

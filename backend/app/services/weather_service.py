@@ -86,14 +86,19 @@ def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
-    """Fetch observed + forecast weather, or return NO DATA. Uses 30-min TTL cache and rate throttling."""
+    """Fetch observed + forecast weather, or return NO DATA. Uses 30-min TTL cache, 11km grid, and rate throttling."""
     global _LAST_REQUEST_TIME
-    cache_key = (round(lat, 4), round(lon, 4))
+    cache_key = (round(lat, 1), round(lon, 1))
     now_ts = time.time()
+    RATE_LIMIT_COOLDOWN_S = 300.0  # 5 minutes
+
     if cache_key in _WEATHER_CACHE:
         cached_time, cached_val = _WEATHER_CACHE[cache_key]
-        if (now_ts - cached_time) < WEATHER_CACHE_TTL_SECONDS:
+        if cached_val is not None and (now_ts - cached_time) < WEATHER_CACHE_TTL_SECONDS:
             return cached_val
+        if cached_val is None and (now_ts - cached_time) < RATE_LIMIT_COOLDOWN_S:
+            logger.debug("Skipping Open-Meteo call — still in 429 cooldown for (%s, %s)", lat, lon)
+            return unavailable(lat, lon, "Rate-limited (cooldown active)")
 
     params = {
         "latitude": lat, "longitude": lon,
@@ -126,6 +131,13 @@ async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
                     _LAST_SUCCESS[cache_key] = parsed["data_status"]["observed_at"] or utcnow().isoformat()
                     _WEATHER_CACHE[cache_key] = (now_ts, parsed)
                     return parsed
+                elif response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", 60))
+                    logger.warning("Open-Meteo 429 rate-limit; backing off %ds for key %s", retry_after, cache_key)
+                    _WEATHER_CACHE[cache_key] = (time.time(), None)
+                    await asyncio.sleep(min(retry_after, 120))
+                    last_error = f"HTTP 429 (Rate-limited, retry after {retry_after}s)"
+                    break
                 last_error = f"HTTP {response.status_code}"
             except Exception as exc:  # noqa: BLE001 - any transport failure is NO DATA
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -138,11 +150,12 @@ async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
 
 def unavailable(lat: float, lon: float, reason: str) -> dict[str, Any]:
     """The replacement for get_fallback_weather(). Carries no values."""
+    cache_key = (round(lat, 1), round(lon, 1))
     return {
         "data_status": no_data(
             SOURCE_KEY,
             reason=f"Open-Meteo unreachable ({reason})",
-            last_success_at=_LAST_SUCCESS.get((lat, lon)),
+            last_success_at=_LAST_SUCCESS.get(cache_key) or _LAST_SUCCESS.get((lat, lon)),
             offline=True,
         ),
         "status": "OFFLINE",

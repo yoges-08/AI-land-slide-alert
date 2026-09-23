@@ -178,6 +178,7 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
             "events. Superseded in M6."
         ),
         "training_data": "SYNTHETIC — see backend/ml/train_models.py",
+        "confidence_note": "This hazard index has not been validated against observed landslides. Use IMD/NDMA guidance as the authoritative source.",
     }
 
 def simulate_scenario(base_features: Dict[str, Any], sim_params: Dict[str, Any]) -> Dict[str, Any]:

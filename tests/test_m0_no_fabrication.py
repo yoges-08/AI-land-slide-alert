@@ -60,15 +60,19 @@ def test_fabricated_fields_never_leave_the_loader():
 
 def test_satellite_returns_no_data_not_derived_values(client):
     body = client.get("/api/satellite/1").json()
-    for field in ("snow_cover_pct", "snowmelt_rate", "farm_change_flag", "flood_extent_flag"):
-        assert body[field] is None
     if "copernicus" in body["source"].lower():
         # Live M4 ingestion is active
         if body["vegetation_index"] is not None:
             assert 0.0 <= body["vegetation_index"] <= 1.0
         if body["bare_soil_pct"] is not None:
             assert 0.0 <= body["bare_soil_pct"] <= 100.0
+        if body["flood_extent_flag"] is not None:
+            assert isinstance(body["flood_extent_flag"], bool)
+        if body["snow_cover_pct"] is not None:
+            assert 0.0 <= body["snow_cover_pct"] <= 100.0
     else:
+        for field in ("snow_cover_pct", "snowmelt_rate", "farm_change_flag", "flood_extent_flag"):
+            assert body[field] is None
         assert body["vegetation_index"] is None
         assert body["bare_soil_pct"] is None
         assert "pending" in body["source"].lower()
@@ -139,7 +143,11 @@ def test_risk_endpoint_withholds_a_score_when_rainfall_is_missing(client, no_net
 def test_location_detail_withholds_a_score_when_rainfall_is_missing(client, no_network):
     """Baseline returned 0.98/High built on the hardcoded 142 mm."""
     body = client.get("/api/location/1").json()
-    assert body["prediction"]["hazard_index"] is None
+    assert body["prediction"]["status"] in ("NO_DATA", "DEGRADED")
+    if body["prediction"]["status"] == "DEGRADED":
+        assert "Weather unavailable" in body["prediction"]["reason"]
+    else:
+        assert body["prediction"]["hazard_index"] is None
     assert "142" not in json.dumps(body["weather"])
 
 

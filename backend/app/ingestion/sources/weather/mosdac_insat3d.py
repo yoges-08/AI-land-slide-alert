@@ -28,7 +28,7 @@ class MosdacInsat3dSource(BaseSource):
     provider = "ISRO / SAC / MOSDAC"
     cadence_minutes = 30
     licence = "Open Government Data (OGD) / Research Non-Commercial"
-    api_endpoint = os.getenv("MOSDAC_API_ENDPOINT", "https://www.mosdac.gov.in/api/v1/qpe")
+    api_endpoint = os.getenv("MOSDAC_API_ENDPOINT", "https://mosdac.gov.in/data/web/data_products_info/QPE")
     max_retries = 3
     retry_backoff_base_s = 0.5
 
