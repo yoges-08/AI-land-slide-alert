@@ -46,11 +46,21 @@ def load_ml_assets():
                 with open(meta_path, "r", encoding="utf-8") as f:
                     _METADATA = json.load(f)
             
-            try:
-                # Initialize TreeExplainer for XGBoost
-                _SHAP_EXPLAINER = shap.TreeExplainer(_LANDSLIDE_MODEL)
-            except Exception as e:
-                print(f"Warning initializing SHAP explainer: {e}")
+            # Lazy SHAP: Do not create TreeExplainer at startup to save ~10-20 MB RAM.
+            # It will be created on first on-demand SHAP computation.
+            _SHAP_EXPLAINER = None
+
+
+def _get_shap_explainer():
+    """Get or lazily construct the SHAP TreeExplainer."""
+    global _SHAP_EXPLAINER
+    if _SHAP_EXPLAINER is None and _LANDSLIDE_MODEL is not None:
+        try:
+            _SHAP_EXPLAINER = shap.TreeExplainer(_LANDSLIDE_MODEL)
+        except Exception as e:
+            print(f"Warning initializing SHAP explainer lazily: {e}")
+    return _SHAP_EXPLAINER
+
 
 def prepare_feature_dataframe(features: Dict[str, Any]) -> pd.DataFrame:
     """
@@ -124,9 +134,10 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
     shap_factors = {}
     top_factors_summary = {}
 
-    if _SHAP_EXPLAINER is not None and _METADATA is not None:
+    explainer = _get_shap_explainer()
+    if explainer is not None and _METADATA is not None:
         try:
-            shap_values = _SHAP_EXPLAINER.shap_values(X_proc)
+            shap_values = explainer.shap_values(X_proc)
             if isinstance(shap_values, list):
                 shap_arr = shap_values[1][0]
             elif len(shap_values.shape) == 2:

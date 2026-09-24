@@ -456,7 +456,20 @@ async def run_simulation(payload: SimulationRequest):
     if not loc:
         raise HTTPException(status_code=404, detail=f"Location ID {target_id} not found.")
 
-    weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
+    # Simulation uses cached weather first — avoids triggering new Open-Meteo calls during slider drags
+    cache_key = (round(loc["latitude"], 1), round(loc["longitude"], 1))
+    from backend.app.services.weather_service import _WEATHER_CACHE, WEATHER_CACHE_TTL_SECONDS
+    import time
+    now_ts = time.time()
+    if cache_key in _WEATHER_CACHE:
+        cached_time, cached_val = _WEATHER_CACHE[cache_key]
+        if cached_val is not None and (now_ts - cached_time) < WEATHER_CACHE_TTL_SECONDS * 2:
+            weather = cached_val
+        else:
+            weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
+    else:
+        weather = await fetch_live_weather(loc["latitude"], loc["longitude"])
+
     observed = (weather or {}).get("observed") or {}
     base = dict(loc)
     base.update({
@@ -477,6 +490,42 @@ async def run_simulation(payload: SimulationRequest):
         factor_changes=sim["factor_changes"],
         disclaimer=settings.PROTOTYPE_DISCLAIMER,
     )
+
+
+@router.get("/debug/memory")
+async def get_memory_diagnostics():
+    """Report memory diagnostics, cache sizes, and process RAM metrics."""
+    try:
+        import psutil
+        process = psutil.Process()
+        mem = process.memory_info()
+        rss_mb = round(mem.rss / 1024 / 1024, 2)
+        vms_mb = round(mem.vms / 1024 / 1024, 2)
+    except Exception:
+        rss_mb = None
+        vms_mb = None
+
+    from backend.app.services.weather_service import _WEATHER_CACHE, _LAST_SUCCESS
+    from backend.app.services.satellite_service import _SAT_CACHE
+    from backend.app.services.ml_service import _SHAP_EXPLAINER
+
+    return _envelope({
+        "process_memory": {
+            "rss_mb": rss_mb,
+            "vms_mb": vms_mb,
+            "render_budget_mb": 512.0,
+            "memory_pressure_pct": round((rss_mb / 512.0) * 100, 1) if rss_mb is not None else None,
+        },
+        "caches": {
+            "weather_cache_entries": len(_WEATHER_CACHE),
+            "last_success_entries": len(_LAST_SUCCESS),
+            "satellite_cache_entries": len(_SAT_CACHE),
+            "locations_cached": len(LOCATIONS_CACHE),
+        },
+        "ml_status": {
+            "shap_explainer_loaded": _SHAP_EXPLAINER is not None,
+        }
+    })
 
 
 @router.get("/model/info")

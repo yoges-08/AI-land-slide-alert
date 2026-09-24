@@ -22,6 +22,35 @@ logger = logging.getLogger(__name__)
 # 30-minute in-memory TTL cache: (round(lat, 3), round(lon, 3)) -> (timestamp, result_dict)
 _SAT_CACHE: dict[tuple[float, float], tuple[float, dict[str, Any]]] = {}
 SAT_CACHE_TTL_SECONDS: float = 30.0 * 60.0
+_SAT_CACHE_MAX_SIZE: int = 150  # Max 150 entries (~1.5 MB)
+
+# Shared HTTP client for satellite requests
+_SHARED_SAT_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+async def _get_sat_http_client() -> httpx.AsyncClient:
+    """Get or create shared HTTP client for satellite requests."""
+    global _SHARED_SAT_CLIENT
+    if _SHARED_SAT_CLIENT is None or _SHARED_SAT_CLIENT.is_closed:
+        _SHARED_SAT_CLIENT = httpx.AsyncClient(
+            timeout=15.0,
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+        )
+    return _SHARED_SAT_CLIENT
+
+
+def _evict_sat_cache() -> None:
+    """Remove expired entries and enforce maximum satellite cache size."""
+    now = time.time()
+    expired = [k for k, (ts, _) in _SAT_CACHE.items() if (now - ts) > SAT_CACHE_TTL_SECONDS]
+    for k in expired:
+        _SAT_CACHE.pop(k, None)
+
+    if len(_SAT_CACHE) > _SAT_CACHE_MAX_SIZE:
+        sorted_keys = sorted(_SAT_CACHE.keys(), key=lambda k: _SAT_CACHE[k][0])
+        for k in sorted_keys[:len(_SAT_CACHE) - _SAT_CACHE_MAX_SIZE]:
+            _SAT_CACHE.pop(k, None)
+
 
 SATELLITE_MAP_LAYERS: Dict[str, Dict[str, Any]] = {
     "nasa_gibs_truecolor": {
@@ -93,27 +122,27 @@ async def _fetch_sentinel2_indices(lat: float, lon: float) -> Optional[Dict[str,
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            token_resp = await client.post(
-                "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": settings.CDSE_CLIENT_ID,
-                    "client_secret": settings.CDSE_CLIENT_SECRET,
-                }
-            )
-            if token_resp.status_code != 200:
-                logger.debug("CDSE token request returned HTTP %d", token_resp.status_code)
-                return None
-            access_token = token_resp.json().get("access_token")
-            if not access_token:
-                return None
+        client = await _get_sat_http_client()
+        token_resp = await client.post(
+            "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": settings.CDSE_CLIENT_ID,
+                "client_secret": settings.CDSE_CLIENT_SECRET,
+            }
+        )
+        if token_resp.status_code != 200:
+            logger.debug("CDSE token request returned HTTP %d", token_resp.status_code)
+            return None
+        access_token = token_resp.json().get("access_token")
+        if not access_token:
+            return None
 
-            end_date = datetime.now(timezone.utc)
-            start_date = end_date - timedelta(days=20)
-            bbox_delta = 0.05
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=20)
+        bbox_delta = 0.05
 
-            evalscript = """//VERSION=3
+        evalscript = """//VERSION=3
 function setup() {
     return {
         input: [{ bands: ["B04", "B08", "SCL", "dataMask"] }],
@@ -132,63 +161,63 @@ function evaluatePixel(sample) {
     };
 }"""
 
-            stat_payload = {
-                "input": {
-                    "bounds": {
-                        "bbox": [lon - bbox_delta, lat - bbox_delta, lon + bbox_delta, lat + bbox_delta],
-                        "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
-                    },
-                    "data": [{
-                        "type": "sentinel-2-l2a",
-                        "dataFilter": {
-                            "timeRange": {
-                                "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-                                "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
-                            },
-                            "maxCloudCoverage": 80
-                        }
-                    }]
+        stat_payload = {
+            "input": {
+                "bounds": {
+                    "bbox": [lon - bbox_delta, lat - bbox_delta, lon + bbox_delta, lat + bbox_delta],
+                    "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
                 },
-                "aggregation": {
-                    "timeRange": {
-                        "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-                        "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
-                    },
-                    "aggregationInterval": {"of": "P20D"},
-                    "evalscript": evalscript
-                }
+                "data": [{
+                    "type": "sentinel-2-l2a",
+                    "dataFilter": {
+                        "timeRange": {
+                            "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                            "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                        },
+                        "maxCloudCoverage": 80
+                    }
+                }]
+            },
+            "aggregation": {
+                "timeRange": {
+                    "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                    "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                },
+                "aggregationInterval": {"of": "P20D"},
+                "evalscript": evalscript
             }
+        }
 
-            resp = await client.post(
-                "https://sh.dataspace.copernicus.eu/api/v1/statistics",
-                json=stat_payload,
-                headers={"Authorization": f"Bearer {access_token}"}
-            )
-            if resp.status_code != 200:
-                return None
+        resp = await client.post(
+            "https://sh.dataspace.copernicus.eu/api/v1/statistics",
+            json=stat_payload,
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        if resp.status_code != 200:
+            return None
 
-            result = resp.json()
-            intervals = result.get("data", [])
-            if not intervals:
-                return None
+        result = resp.json()
+        intervals = result.get("data", [])
+        if not intervals:
+            return None
 
-            latest = intervals[-1]
-            outputs = latest.get("outputs", {}).get("default", {}).get("bands", {})
-            ndvi_stats = outputs.get("B0", {})
-            bare_stats = outputs.get("B1", {})
+        latest = intervals[-1]
+        outputs = latest.get("outputs", {}).get("default", {}).get("bands", {})
+        ndvi_stats = outputs.get("B0", {})
+        bare_stats = outputs.get("B1", {})
 
-            ndvi_val = ndvi_stats.get("stats", {}).get("mean")
-            bare_pct = bare_stats.get("stats", {}).get("mean")
+        ndvi_val = ndvi_stats.get("stats", {}).get("mean")
+        bare_pct = bare_stats.get("stats", {}).get("mean")
 
-            if ndvi_val is None and bare_pct is None:
-                return None
+        if ndvi_val is None and bare_pct is None:
+            return None
 
-            return {
-                "vegetation_index": round(ndvi_val, 3) if ndvi_val is not None else 0.65,
-                "bare_soil_pct": round(bare_pct * 100, 1) if bare_pct is not None else 20.0,
-                "source": "Copernicus Sentinel-2 L2A",
-                "observed_at": latest.get("interval", {}).get("to"),
-            }
+        return {
+            "vegetation_index": round(ndvi_val, 3) if ndvi_val is not None else 0.65,
+            "bare_soil_pct": round(bare_pct * 100, 1) if bare_pct is not None else 20.0,
+            "source": "Copernicus Sentinel-2 L2A",
+            "observed_at": latest.get("interval", {}).get("to"),
+        }
     except Exception as exc:
         logger.debug("Sentinel-2 query skipped: %s", exc)
         return None
@@ -200,26 +229,26 @@ async def _fetch_sentinel1_sar(lat: float, lon: float) -> Optional[Dict[str, Any
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            token_resp = await client.post(
-                "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": settings.CDSE_CLIENT_ID,
-                    "client_secret": settings.CDSE_CLIENT_SECRET,
-                }
-            )
-            if token_resp.status_code != 200:
-                return None
-            access_token = token_resp.json().get("access_token")
-            if not access_token:
-                return None
+        client = await _get_sat_http_client()
+        token_resp = await client.post(
+            "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": settings.CDSE_CLIENT_ID,
+                "client_secret": settings.CDSE_CLIENT_SECRET,
+            }
+        )
+        if token_resp.status_code != 200:
+            return None
+        access_token = token_resp.json().get("access_token")
+        if not access_token:
+            return None
 
-            end_date = datetime.now(timezone.utc)
-            start_date = end_date - timedelta(days=14)
-            bbox_delta = 0.05
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=14)
+        bbox_delta = 0.05
 
-            evalscript = """//VERSION=3
+        evalscript = """//VERSION=3
 function setup() {
     return {
         input: [{ bands: ["VV", "VH", "dataMask"] }],
@@ -239,71 +268,71 @@ function evaluatePixel(sample) {
     };
 }"""
 
-            stat_payload = {
-                "input": {
-                    "bounds": {
-                        "bbox": [lon - bbox_delta, lat - bbox_delta, lon + bbox_delta, lat + bbox_delta],
-                        "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
-                    },
-                    "data": [{
-                        "type": "sentinel-1-grd",
-                        "dataFilter": {
-                            "timeRange": {
-                                "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-                                "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
-                            },
-                            "acquisitionMode": "IW"
-                        }
-                    }]
+        stat_payload = {
+            "input": {
+                "bounds": {
+                    "bbox": [lon - bbox_delta, lat - bbox_delta, lon + bbox_delta, lat + bbox_delta],
+                    "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
                 },
-                "aggregation": {
-                    "timeRange": {
-                        "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
-                        "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
-                    },
-                    "aggregationInterval": {"of": "P14D"},
-                    "evalscript": evalscript
-                }
+                "data": [{
+                    "type": "sentinel-1-grd",
+                    "dataFilter": {
+                        "timeRange": {
+                            "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                            "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                        },
+                        "acquisitionMode": "IW"
+                    }
+                }]
+            },
+            "aggregation": {
+                "timeRange": {
+                    "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+                    "to": end_date.strftime("%Y-%m-%dT23:59:59Z")
+                },
+                "aggregationInterval": {"of": "P14D"},
+                "evalscript": evalscript
             }
+        }
 
-            resp = await client.post(
-                "https://sh.dataspace.copernicus.eu/api/v1/statistics",
-                json=stat_payload,
-                headers={"Authorization": f"Bearer {access_token}"}
-            )
-            if resp.status_code != 200:
-                return None
+        resp = await client.post(
+            "https://sh.dataspace.copernicus.eu/api/v1/statistics",
+            json=stat_payload,
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        if resp.status_code != 200:
+            return None
 
-            result = resp.json()
-            intervals = result.get("data", [])
-            if not intervals:
-                return None
+        result = resp.json()
+        intervals = result.get("data", [])
+        if not intervals:
+            return None
 
-            latest = intervals[-1]
-            outputs = latest.get("outputs", {}).get("default", {}).get("bands", {})
-            vv_stats = outputs.get("B0", {})
-            vh_stats = outputs.get("B1", {})
+        latest = intervals[-1]
+        outputs = latest.get("outputs", {}).get("default", {}).get("bands", {})
+        vv_stats = outputs.get("B0", {})
+        vh_stats = outputs.get("B1", {})
 
-            vv_mean = vv_stats.get("stats", {}).get("mean")
-            vh_mean = vh_stats.get("stats", {}).get("mean")
+        vv_mean = vv_stats.get("stats", {}).get("mean")
+        vh_mean = vh_stats.get("stats", {}).get("mean")
 
-            if vv_mean is None:
-                return None
+        if vv_mean is None:
+            return None
 
-            flood_flag = vv_mean < -18.0
-            snow_pct = None
-            if vv_mean < -12.0 and vh_mean is not None and vh_mean < -22.0:
-                snow_pct = min(100.0, max(0.0, (-12.0 - vv_mean) * 15.0))
+        flood_flag = vv_mean < -18.0
+        snow_pct = None
+        if vv_mean < -12.0 and vh_mean is not None and vh_mean < -22.0:
+            snow_pct = min(100.0, max(0.0, (-12.0 - vv_mean) * 15.0))
 
-            return {
-                "flood_extent_flag": flood_flag,
-                "snow_cover_pct": round(snow_pct, 1) if snow_pct is not None else None,
-                "snowmelt_rate": None,
-                "vv_backscatter_db": round(vv_mean, 2),
-                "vh_backscatter_db": round(vh_mean, 2) if vh_mean else None,
-                "source": "Copernicus Sentinel-1 GRD",
-                "observed_at": latest.get("interval", {}).get("to"),
-            }
+        return {
+            "flood_extent_flag": flood_flag,
+            "snow_cover_pct": round(snow_pct, 1) if snow_pct is not None else None,
+            "snowmelt_rate": None,
+            "vv_backscatter_db": round(vv_mean, 2),
+            "vh_backscatter_db": round(vh_mean, 2) if vh_mean else None,
+            "source": "Copernicus Sentinel-1 GRD",
+            "observed_at": latest.get("interval", {}).get("to"),
+        }
     except Exception as exc:
         logger.debug("Sentinel-1 SAR query skipped: %s", exc)
         return None
@@ -320,11 +349,11 @@ async def _fetch_nasa_firms_fire(lat: float, lon: float) -> Optional[bool]:
             f"{settings.NASA_FIRMS_MAP_KEY}/VIIRS_SNPP_NRT/"
             f"{round(lon-0.5, 3)},{round(lat-0.5, 3)},{round(lon+0.5, 3)},{round(lat+0.5, 3)}/1"
         )
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                lines = resp.text.strip().split("\n")
-                return len(lines) > 1
+        client = await _get_sat_http_client()
+        resp = await client.get(url)
+        if resp.status_code == 200:
+            lines = resp.text.strip().split("\n")
+            return len(lines) > 1
     except Exception as exc:
         logger.debug("FIRMS fetch skipped: %s", exc)
     return None
@@ -338,6 +367,8 @@ async def get_satellite_observation(location: dict) -> Dict[str, Any]:
             location.get("elevation", 0.0), location.get("slope", 0.0),
             location.get("latitude", 0.0), location.get("longitude", 0.0),
         )
+
+    _evict_sat_cache()
 
     lat = float(location.get("latitude", 0.0) or 0.0)
     lon = float(location.get("longitude", 0.0) or 0.0)

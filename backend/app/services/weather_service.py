@@ -53,11 +53,50 @@ WMO_WEATHER_MAP = {
 # Last successful fetch per (lat, lon), so an OFFLINE response can state when we
 # last actually had data. In-memory for M0; moves to source_health in M2.
 _LAST_SUCCESS: dict[tuple[float, float], str] = {}
+_LAST_SUCCESS_MAX_SIZE: int = 200
 
-# 30-minute in-memory TTL cache: (round(lat, 4), round(lon, 4)) -> (timestamp, parsed_data)
+# 30-minute in-memory TTL cache: (round(lat, 1), round(lon, 1)) -> (timestamp, parsed_data)
 import time
 _WEATHER_CACHE: dict[tuple[float, float], tuple[float, dict[str, Any]]] = {}
 WEATHER_CACHE_TTL_SECONDS: float = 30.0 * 60.0  # 30 minutes
+_WEATHER_CACHE_MAX_SIZE: int = 200  # Max 200 entries (~2 MB)
+
+# Shared HTTP client for weather requests to prevent connection churn & memory spikes
+_SHARED_WEATHER_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+async def _get_weather_http_client() -> httpx.AsyncClient:
+    """Get or create shared HTTP client for weather requests."""
+    global _SHARED_WEATHER_CLIENT
+    if _SHARED_WEATHER_CLIENT is None or _SHARED_WEATHER_CLIENT.is_closed:
+        _SHARED_WEATHER_CLIENT = httpx.AsyncClient(
+            timeout=settings.OPEN_METEO_TIMEOUT_S,
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+        )
+    return _SHARED_WEATHER_CLIENT
+
+
+def _evict_weather_cache() -> None:
+    """Remove expired entries and enforce maximum cache size."""
+    now = time.time()
+    # 1. Remove expired cache entries
+    expired = [k for k, (ts, _) in _WEATHER_CACHE.items() if (now - ts) > WEATHER_CACHE_TTL_SECONDS]
+    for k in expired:
+        _WEATHER_CACHE.pop(k, None)
+
+    # 2. If still exceeding max size, remove oldest entries
+    if len(_WEATHER_CACHE) > _WEATHER_CACHE_MAX_SIZE:
+        sorted_keys = sorted(_WEATHER_CACHE.keys(), key=lambda k: _WEATHER_CACHE[k][0])
+        for k in sorted_keys[:len(_WEATHER_CACHE) - _WEATHER_CACHE_MAX_SIZE]:
+            _WEATHER_CACHE.pop(k, None)
+
+    # 3. Cap _LAST_SUCCESS size
+    if len(_LAST_SUCCESS) > _LAST_SUCCESS_MAX_SIZE:
+        excess = len(_LAST_SUCCESS) - _LAST_SUCCESS_MAX_SIZE
+        keys_to_remove = list(_LAST_SUCCESS.keys())[:excess]
+        for k in keys_to_remove:
+            _LAST_SUCCESS.pop(k, None)
+
 
 _OPEN_METEO_SEMAPHORE = asyncio.Semaphore(3)
 _LAST_REQUEST_TIME: float = 0.0
@@ -88,6 +127,7 @@ def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
 async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
     """Fetch observed + forecast weather, or return NO DATA. Uses 30-min TTL cache, 11km grid, and rate throttling."""
     global _LAST_REQUEST_TIME
+    _evict_weather_cache()
     cache_key = (round(lat, 1), round(lon, 1))
     now_ts = time.time()
     RATE_LIMIT_COOLDOWN_S = 300.0  # 5 minutes
@@ -122,10 +162,10 @@ async def fetch_live_weather(lat: float, lon: float) -> dict[str, Any]:
             await asyncio.sleep(_MIN_REQUEST_INTERVAL_S - elapsed)
         _LAST_REQUEST_TIME = time.time()
 
+        client = await _get_weather_http_client()
         for attempt in range(settings.OPEN_METEO_RETRIES + 1):
             try:
-                async with httpx.AsyncClient(timeout=settings.OPEN_METEO_TIMEOUT_S) as client:
-                    response = await client.get(OPEN_METEO_URL, params=params, headers=headers)
+                response = await client.get(OPEN_METEO_URL, params=params, headers=headers)
                 if response.status_code == 200:
                     parsed = parse_open_meteo_response(response.json(), lat, lon)
                     _LAST_SUCCESS[cache_key] = parsed["data_status"]["observed_at"] or utcnow().isoformat()

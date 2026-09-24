@@ -43,6 +43,13 @@ class NasaGpmSource(BaseSource):
         if simulated_payload is not None:
             return simulated_payload
 
+        # Guard: skip if no Earthdata token and no username/password configured
+        if not self.earthdata_token and not (os.getenv("EARTHDATA_USERNAME") and os.getenv("EARTHDATA_PASSWORD")):
+            raise SourceFetchError(
+                "EARTHDATA_TOKEN is empty. Skipping NASA GPM fetch to conserve memory. "
+                "Configure EARTHDATA_TOKEN in environment to enable."
+            )
+
         headers = {
             "Accept": "application/json",
             "User-Agent": "LANDSAFE-NER/1.0 (Academic-Disaster-Watch)",
