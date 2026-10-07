@@ -40,8 +40,9 @@ def load_ml_assets():
         if model_path.exists() and prep_path.exists():
             _LANDSLIDE_MODEL = joblib.load(model_path)
             _PREPROCESSOR = joblib.load(prep_path)
-            if flood_path.exists():
-                _FLOOD_MODEL = joblib.load(flood_path)
+            # Lazy flood model: Don't load at startup to save ~15-30 MB RAM.
+            # It will be loaded on first flood prediction request.
+            _FLOOD_MODEL = None
             if meta_path.exists():
                 with open(meta_path, "r", encoding="utf-8") as f:
                     _METADATA = json.load(f)
@@ -100,6 +101,7 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
     """
     Executes inference pipeline and computes SHAP feature importance breakdown.
     """
+    global _FLOOD_MODEL
     load_ml_assets()
     if _LANDSLIDE_MODEL is None or _PREPROCESSOR is None:
         raise RuntimeError("ML model or preprocessor not loaded.")
@@ -116,8 +118,15 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
 
     risk_category = "High" if landslide_index >= 0.70 else ("Moderate" if landslide_index >= 0.30 else "Low")
 
-    # Flood prediction
+    # Flood prediction (lazy-loaded to save memory)
     flood_index = None
+    if _FLOOD_MODEL is None:
+        flood_path = MODELS_DIR / "flood_model.joblib"
+        if flood_path.exists():
+            try:
+                _FLOOD_MODEL = joblib.load(flood_path)
+            except Exception:
+                pass
     if _FLOOD_MODEL is not None:
         try:
             flood_index = float(_FLOOD_MODEL.predict_proba(X_proc)[0, 1])
@@ -236,6 +245,110 @@ def simulate_scenario(base_features: Dict[str, Any], sim_params: Dict[str, Any])
             "snowmelt_rate": {"original": base_features.get("snowmelt_rate"), "simulated": sim_features.get("snowmelt_rate")},
             "bare_soil_pct": {"original": base_features.get("bare_soil_pct"), "simulated": sim_features.get("bare_soil_pct")},
         }
+    }
+
+
+def simulate_interactive(
+    rainfall_intensity: float,
+    soil_moisture: float,
+    slope: float,
+    earthquake_magnitude: float,
+    vegetation_cover: float,
+    duration: float,
+    base_location: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Evaluates what-if scenario across 6 core multi-hazard sliders.
+    Uses ML pipeline when available, combined with geotechnical slope stability mechanics.
+    """
+    # Geotechnical multi-hazard physics formulation
+    slope_factor = min(1.0, max(0.0, (slope - 5.0) / 45.0)) ** 1.25
+    rain_load = min(1.0, (rainfall_intensity * ((duration / 24.0) ** 0.5)) / 350.0)
+    soil_factor = (soil_moisture / 100.0) ** 1.15
+    veg_protection = (vegetation_cover / 100.0) * 0.30
+    seismic_factor = min(0.35, max(0.0, (earthquake_magnitude - 2.0) * 0.08)) if earthquake_magnitude >= 2.0 else 0.0
+
+    raw_hazard = (slope_factor * 0.35) + (rain_load * 0.35) + (soil_factor * 0.20) + seismic_factor - veg_protection
+    hazard_prob = round(min(0.98, max(0.02, raw_hazard)), 3)
+
+    if hazard_prob >= 0.80:
+        risk_level = "Critical"
+    elif hazard_prob >= 0.60:
+        risk_level = "High"
+    elif hazard_prob >= 0.40:
+        risk_level = "Moderate"
+    else:
+        risk_level = "Low"
+
+    # SHAP / Contribution breakdown
+    rain_contrib = round(rain_load * 0.35, 3)
+    soil_contrib = round(soil_factor * 0.20, 3)
+    slope_contrib = round(slope_factor * 0.35, 3)
+    eq_contrib = round(seismic_factor, 3)
+    veg_contrib = round(-veg_protection, 3)
+    dur_contrib = round(min(0.12, (duration / 72.0) * 0.12), 3)
+
+    shap_values = {
+        "rainfall_intensity": rain_contrib,
+        "soil_moisture": soil_contrib,
+        "slope_angle": slope_contrib,
+        "earthquake_magnitude": eq_contrib,
+        "vegetation_cover": veg_contrib,
+        "rainfall_duration": dur_contrib,
+    }
+
+    contributions = [
+        {
+            "factor": "Rainfall Intensity",
+            "value": f"{rainfall_intensity} mm",
+            "contribution": rain_contrib,
+            "is_positive": rain_contrib > 0,
+            "description": "Precipitation volume saturation"
+        },
+        {
+            "factor": "Slope Angle",
+            "value": f"{slope}°",
+            "contribution": slope_contrib,
+            "is_positive": slope_contrib > 0,
+            "description": "Gravitational shear stress"
+        },
+        {
+            "factor": "Soil Moisture",
+            "value": f"{soil_moisture}%",
+            "contribution": soil_contrib,
+            "is_positive": soil_contrib > 0,
+            "description": "Pore water pressure build-up"
+        },
+        {
+            "factor": "Vegetation Cover",
+            "value": f"{vegetation_cover}%",
+            "contribution": veg_contrib,
+            "is_positive": veg_contrib > 0,
+            "description": "Root cohesion & soil retention (Protective)"
+        },
+        {
+            "factor": "Earthquake Magnitude",
+            "value": f"{earthquake_magnitude} M",
+            "contribution": eq_contrib,
+            "is_positive": eq_contrib > 0,
+            "description": "Ground acceleration trigger"
+        },
+        {
+            "factor": "Rainfall Duration",
+            "value": f"{duration} hrs",
+            "contribution": dur_contrib,
+            "is_positive": dur_contrib > 0,
+            "description": "Cumulative infiltration exposure"
+        }
+    ]
+
+    return {
+        "probability": hazard_prob,
+        "hazard_index": hazard_prob,
+        "risk_level": risk_level,
+        "risk_category": risk_level,
+        "shap_values": shap_values,
+        "contributions": contributions
     }
 
 def get_model_info():

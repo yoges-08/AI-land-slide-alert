@@ -14,6 +14,8 @@ import EarlyWarningBanner from './components/EarlyWarningBanner';
 import SimulationModal from './components/SimulationModal';
 import ShapExplanationModal from './components/ShapExplanationModal';
 import AiAssistantPanel from './components/AiAssistantPanel';
+import NotificationPanel from './components/NotificationPanel';
+import EvacuationPanel from './components/EvacuationPanel';
 import DisclaimerFooter from './components/DisclaimerFooter';
 import DataSourceTag from './components/DataSourceTag';
 
@@ -60,6 +62,9 @@ export default function App() {
   const [isSimulationOpen, setIsSimulationOpen] = useState(false);
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
+  const [isEvacuationOpen, setIsEvacuationOpen] = useState(false);
+  const [evacuationRoute, setEvacuationRoute] = useState(null);
+  const [safeShelters, setSafeShelters] = useState([]);
 
   // Global Keyboard Shortcuts (Ctrl/Cmd+K to toggle AI, Escape to close)
   useEffect(() => {
@@ -434,19 +439,37 @@ export default function App() {
                     selectedLocation={selectedLocation}
                     onSelectLocation={handleSelectLocation}
                     customZoom={selectedDistrict ? 9 : selectedState ? 7 : 5}
+                    evacuationRoute={evacuationRoute}
+                    safeShelters={safeShelters}
                   />
                 </div>
 
-                {/* Center-Right: Selected Location Details Panel (3 Cols) */}
+                {/* Center-Right: Selected Location Details Panel OR Evacuation Panel (3 Cols) */}
                 <div className="lg:col-span-3 min-h-[460px]">
-                  <LocationDetails
-                    location={selectedLocation}
-                    liveWeather={liveWeather}
-                    prediction={locationDetail?.prediction}
-                    onClose={() => setSelectedLocation(null)}
-                    onOpenAnalysis={() => setIsAnalysisOpen(true)}
-                    onOpenSimulation={() => setIsSimulationOpen(true)}
-                  />
+                  {isEvacuationOpen && selectedLocation ? (
+                    <EvacuationPanel
+                      location={selectedLocation}
+                      onClose={() => {
+                        setIsEvacuationOpen(false);
+                        setEvacuationRoute(null);
+                        setSafeShelters([]);
+                      }}
+                      onRouteSelected={(route, shelters) => {
+                        setEvacuationRoute(route);
+                        setSafeShelters(shelters);
+                      }}
+                    />
+                  ) : (
+                    <LocationDetails
+                      location={selectedLocation}
+                      liveWeather={liveWeather}
+                      prediction={locationDetail?.prediction}
+                      onClose={() => setSelectedLocation(null)}
+                      onOpenAnalysis={() => setIsAnalysisOpen(true)}
+                      onOpenSimulation={() => setIsSimulationOpen(true)}
+                      onOpenEvacuation={() => setIsEvacuationOpen(true)}
+                    />
+                  )}
                 </div>
 
                 {/* Right Column: Recent Alerts + 5-Day Forecast (3 Cols) */}
@@ -497,17 +520,35 @@ export default function App() {
                   selectedLocation={selectedLocation}
                   onSelectLocation={handleSelectLocation}
                   customZoom={selectedDistrict ? 9 : selectedState ? 7 : 5}
+                  evacuationRoute={evacuationRoute}
+                  safeShelters={safeShelters}
                 />
               </div>
               <div className="lg:col-span-1 min-h-[620px]">
-                <LocationDetails
-                  location={selectedLocation}
-                  liveWeather={liveWeather}
-                  prediction={locationDetail?.prediction}
-                  onClose={() => setSelectedLocation(null)}
-                  onOpenAnalysis={() => setIsAnalysisOpen(true)}
-                  onOpenSimulation={() => setIsSimulationOpen(true)}
-                />
+                {isEvacuationOpen && selectedLocation ? (
+                  <EvacuationPanel
+                    location={selectedLocation}
+                    onClose={() => {
+                      setIsEvacuationOpen(false);
+                      setEvacuationRoute(null);
+                      setSafeShelters([]);
+                    }}
+                    onRouteSelected={(route, shelters) => {
+                      setEvacuationRoute(route);
+                      setSafeShelters(shelters);
+                    }}
+                  />
+                ) : (
+                  <LocationDetails
+                    location={selectedLocation}
+                    liveWeather={liveWeather}
+                    prediction={locationDetail?.prediction}
+                    onClose={() => setSelectedLocation(null)}
+                    onOpenAnalysis={() => setIsAnalysisOpen(true)}
+                    onOpenSimulation={() => setIsSimulationOpen(true)}
+                    onOpenEvacuation={() => setIsEvacuationOpen(true)}
+                  />
+                )}
               </div>
             </div>
           )}
@@ -620,6 +661,14 @@ export default function App() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* TAB: NOTIFICATIONS & SMS DISPATCH */}
+          {activeTab === 'notifications' && (
+            <NotificationPanel
+              locations={locations}
+              selectedLocation={selectedLocation}
+            />
           )}
 
           {/* TAB 5: ALERTS */}

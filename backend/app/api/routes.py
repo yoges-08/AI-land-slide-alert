@@ -31,12 +31,18 @@ from backend.app.models.db_models import DataSource, SourceHealth
 from backend.app.models.schema import (
     LocationResponse, PredictRequest, PredictResponse,
     SimulationRequest, SimulationResponse,
+    SimulateWhatIfRequest, SimulateWhatIfResponse,
+    NotificationSubscribeRequest, NotificationTestRequest,
     SatelliteInfoResponse, StateDistrictHierarchyItem,
 )
 from backend.app.services.alert_service import (
     WRITE_DISABLED_REASON, evaluate_threshold_breach, get_recent_alerts,
 )
-from backend.app.services.ml_service import get_model_info, predict_risk, simulate_scenario
+from backend.app.services.ml_service import get_model_info, predict_risk, simulate_scenario, simulate_interactive
+from backend.app.services.notification_service import (
+    get_notification_log, get_subscribers, subscribe_phone, unsubscribe_phone,
+    send_sms_alert, send_test_alert
+)
 from backend.app.services.satellite_service import get_available_layers, get_satellite_observation
 from backend.app.services.weather_service import fetch_live_weather
 
@@ -490,6 +496,129 @@ async def run_simulation(payload: SimulationRequest):
         factor_changes=sim["factor_changes"],
         disclaimer=settings.PROTOTYPE_DISCLAIMER,
     )
+
+
+@router.post("/simulate", response_model=SimulateWhatIfResponse)
+async def run_interactive_simulation(payload: SimulateWhatIfRequest):
+    """
+    Enhanced What-If Scenario Simulator endpoint.
+    Accepts rainfall intensity, soil moisture, slope angle, earthquake magnitude,
+    vegetation cover, and rainfall duration. Evaluates risk and returns SHAP contributions.
+    """
+    loc = None
+    if payload.location_id is not None:
+        locs = get_all_cached_locations()
+        loc = next((l for l in locs if l.get("id") == payload.location_id), None)
+
+    res = simulate_interactive(
+        rainfall_intensity=payload.rainfall_intensity,
+        soil_moisture=payload.soil_moisture,
+        slope=payload.slope,
+        earthquake_magnitude=payload.earthquake_magnitude,
+        vegetation_cover=payload.vegetation_cover,
+        duration=payload.duration,
+        base_location=loc
+    )
+
+    return SimulateWhatIfResponse(
+        probability=res["probability"],
+        hazard_index=res["hazard_index"],
+        risk_level=res["risk_level"],
+        risk_category=res["risk_category"],
+        shap_values=res["shap_values"],
+        contributions=res["contributions"],
+        disclaimer=settings.PROTOTYPE_DISCLAIMER,
+        timestamp=utcnow().isoformat()
+    )
+
+
+# --- SMS & WhatsApp Multi-Hazard Notification Endpoints ---
+
+@router.post("/notifications/subscribe")
+async def subscribe_notifications(payload: NotificationSubscribeRequest):
+    """Register phone number for real-time hazard alerts."""
+    res = subscribe_phone(
+        phone_number=payload.phone_number,
+        district=payload.district,
+        name=payload.name
+    )
+    return {
+        "success": True,
+        "message": f"Successfully registered {payload.phone_number} for alerts in {payload.district or 'All Districts'}",
+        **res
+    }
+
+
+@router.get("/notifications/log")
+async def get_recent_notifications(limit: int = 50):
+    """Retrieve history of dispatched emergency SMS & WhatsApp notifications."""
+    logs = get_notification_log(limit=limit)
+    return {
+        "notifications": logs,
+        "total_dispatched": len(logs),
+        "demo_mode": settings.NOTIFICATION_DEMO_MODE or not bool(settings.TWILIO_ACCOUNT_SID),
+        "disclaimer": settings.PROTOTYPE_DISCLAIMER
+    }
+
+
+@router.post("/notifications/test")
+async def trigger_test_notification(payload: NotificationTestRequest):
+    """Send or simulate an immediate test alert to verify gateway delivery."""
+    result = send_test_alert(
+        phone_number=payload.phone_number,
+        district=payload.district or "Wayanad"
+    )
+    return {
+        "success": result.get("status") in ("SENT", "DEMO_DELIVERED"),
+        "result": result,
+        "demo_mode": settings.NOTIFICATION_DEMO_MODE or not bool(settings.TWILIO_ACCOUNT_SID)
+    }
+
+
+@router.get("/notifications/subscribers")
+async def list_subscribers():
+    """Retrieve active hazard broadcast subscribers."""
+    subs = get_subscribers()
+    return {
+        "subscribers": subs,
+        "count": len(subs)
+    }
+
+
+# --- AI-Powered Evacuation Route & Safe Shelter Planning Endpoints ---
+
+@router.get("/evacuation/{district_id}")
+async def get_evacuation_plan(district_id: str):
+    """
+    Computes emergency evacuation corridors to nearest safe shelters & NDRF stations.
+    Avoids high-hazard slope cuttings and returns turn-by-turn coordinate paths.
+    """
+    from backend.app.services.evacuation_service import plan_evacuation_route
+    locs = get_all_cached_locations()
+    
+    # Try match by ID (if integer) or by district/name
+    target_loc = None
+    if district_id.isdigit():
+        target_loc = next((l for l in locs if l.get("id") == int(district_id)), None)
+    
+    if not target_loc:
+        target_loc = next(
+            (l for l in locs if l.get("name", "").lower() == district_id.lower() or l.get("district", "").lower() == district_id.lower()),
+            None
+        )
+    
+    if not target_loc:
+        target_loc = locs[0] if locs else {"name": "Wayanad", "district": "Wayanad", "state": "Kerala", "latitude": 11.685, "longitude": 76.132, "slope": 35, "elevation": 1100}
+
+    plan = plan_evacuation_route(target_loc)
+    return {
+        **plan,
+        "disclaimer": settings.PROTOTYPE_DISCLAIMER,
+        "timestamp": utcnow().isoformat()
+    }
+
+
+
 
 
 @router.get("/debug/memory")

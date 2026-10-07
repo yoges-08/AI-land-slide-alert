@@ -119,6 +119,39 @@ class SimulationResponse(BaseModel):
     disclaimer: str
 
 
+class SimulateWhatIfRequest(BaseModel):
+    rainfall_intensity: float = Field(default=80.0, ge=0.0, le=600.0)
+    soil_moisture: float = Field(default=50.0, ge=0.0, le=100.0)
+    slope: float = Field(default=30.0, ge=0.0, le=90.0)
+    earthquake_magnitude: float = Field(default=0.0, ge=0.0, le=10.0)
+    vegetation_cover: float = Field(default=50.0, ge=0.0, le=100.0)
+    duration: float = Field(default=24.0, ge=1.0, le=120.0)
+    location_id: Optional[int] = None
+
+
+class SimulateWhatIfResponse(BaseModel):
+    probability: float
+    hazard_index: float
+    risk_level: str
+    risk_category: str
+    shap_values: Dict[str, float]
+    contributions: List[Dict[str, Any]]
+    disclaimer: str
+    timestamp: str
+
+
+class NotificationSubscribeRequest(BaseModel):
+    phone_number: str = Field(..., min_length=7, max_length=20)
+    district: Optional[str] = "All Districts"
+    name: Optional[str] = "Citizen"
+
+
+class NotificationTestRequest(BaseModel):
+    phone_number: str = Field(..., min_length=7, max_length=20)
+    district: Optional[str] = "Wayanad"
+
+
+
 class AlertItem(BaseModel):
     id: int
     location_id: int

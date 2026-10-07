@@ -14,7 +14,13 @@ import {
   ChevronRight,
   Info,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  User,
+  Bot
 } from 'lucide-react';
 import { sendAssistantChat } from '../services/api';
 
@@ -28,7 +34,7 @@ export default function AiAssistantPanel({
     {
       id: 'welcome-msg',
       role: 'assistant',
-      content: `### 👋 Welcome to LANDSAFE-NER AI Assistant\n\nI provide **grounded meteorological & multi-hazard intelligence** across all 788 LGD districts in India.\n\n**What you can ask me:**\n- 🌦️ *"Rain in Wayanad tomorrow?"* or 5-day weather forecasts.\n- 📊 *"Top 5 high landslide risk districts in Kerala"* (cross-district ranking).\n- 🌐 *"Recent earthquake activity near Northeast India"* (USGS/NCS real-time).\n- 🏔️ *"Landslide and soil saturation assessment for Gangtok"*.\n- 🛡️ *"Safety guidelines for heavy rainfall and slope failure"*.\n\n> [!NOTE]\n> All data is strictly derived from live Open-Meteo, Sentinel-2/1, NASA FIRMS, and GSI models with zero fabrication.`,
+      content: `### 👋 Welcome to LANDSAFE-NER AI Voice & Multi-Hazard Assistant\n\nI provide **grounded meteorological & multi-hazard intelligence** across all 788 LGD districts in India.\n\n**What you can ask or speak to me:**\n- 🌦️ *"Rain in Wayanad tomorrow?"* (5-day high-resolution forecast)\n- 📊 *"Show me the top 5 high-risk districts in Kerala"* (cross-district ranking)\n- 🏔️ *"What caused the 2024 Wayanad disaster?"* (geomorphological breakdown)\n- 🚗 *"Is it safe to travel to Munnar today?"* (road & slope advisory)\n- 🌐 *"Recent earthquake activity near Northeast India"* (USGS/NCS real-time)\n\n> [!NOTE]\n> Real-time data strictly reconciled from Open-Meteo, Copernicus Sentinel, NASA FIRMS, and GSI models with zero fabrication.`,
       sources: ['LANDSAFE-NER Core', 'LGD 788 Database'],
       tools_used: ['system_init'],
       timestamp_ist: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }) + ' IST',
@@ -37,8 +43,12 @@ export default function AiAssistantPanel({
   ]);
   const [inputQuery, setInputQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [speakingMsgId, setSpeakingMsgId] = useState(null);
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -49,8 +59,101 @@ export default function AiAssistantPanel({
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 150);
       scrollToBottom();
+    } else {
+      // Stop speech synthesis when panel closes
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      if (recognitionRef.current && isListening) {
+        recognitionRef.current.stop();
+        setIsListening(false);
+      }
     }
   }, [isOpen, messages]);
+
+  // Voice Input - Web Speech API SpeechRecognition
+  const toggleVoiceInput = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Speech Recognition is not supported in this browser. Please use Google Chrome or Microsoft Edge.');
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'en-IN';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        if (transcript) {
+          setInputQuery(transcript);
+          handleSend(transcript);
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.warn('Speech recognition error:', event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.warn('Speech recognition initialization error:', err);
+      setIsListening(false);
+    }
+  };
+
+  // Text to Speech (TTS) - SpeechSynthesis
+  const toggleSpeak = (msgId, text) => {
+    if (!window.speechSynthesis) {
+      alert('Speech Synthesis is not supported in this browser.');
+      return;
+    }
+
+    if (speakingMsgId === msgId) {
+      window.speechSynthesis.cancel();
+      setSpeakingMsgId(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    // Clean markdown for spoken narration
+    const cleanSpeechText = text
+      .replace(/[#*`_~>\[\]]/g, '')
+      .replace(/\|/g, ', ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const utterance = new SpeechSynthesisUtterance(cleanSpeechText);
+    utterance.lang = 'en-IN';
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+
+    utterance.onend = () => setSpeakingMsgId(null);
+    utterance.onerror = () => setSpeakingMsgId(null);
+
+    setSpeakingMsgId(msgId);
+    window.speechSynthesis.speak(utterance);
+  };
 
   const handleSend = async (queryToSend = null) => {
     const text = (queryToSend || inputQuery).trim();
@@ -116,11 +219,15 @@ export default function AiAssistantPanel({
   };
 
   const handleClearHistory = () => {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      setSpeakingMsgId(null);
+    }
     setMessages([
       {
         id: `welcome-${Date.now()}`,
         role: 'assistant',
-        content: `Chat session cleared. You can ask about weather, hazard susceptibility, earthquake activity, or safety protocols across any of India's 788 LGD districts.`,
+        content: `Chat session cleared. You can ask or speak about weather, hazard susceptibility, earthquake activity, or safety protocols across any of India's 788 LGD districts.`,
         sources: ['LANDSAFE-NER Core'],
         timestamp_ist: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }) + ' IST',
       }
@@ -128,10 +235,12 @@ export default function AiAssistantPanel({
   };
 
   const suggestedPrompts = [
-    `Rain in ${selectedLocation?.name || 'Wayanad'} tomorrow?`,
-    `Top 5 high landslide risk districts in ${selectedLocation?.state || 'Kerala'}`,
-    `Recent earthquake activity near Northeast India`,
-    `Landslide safety guidelines and citizen actions`,
+    "What's the landslide risk in Wayanad?",
+    "Show me the top 5 high-risk districts",
+    "What caused the 2024 Wayanad disaster?",
+    "Is it safe to travel to Munnar today?",
+    "Compare rainfall in Kerala vs Uttarakhand",
+    "Recent earthquake activity near Northeast India",
   ];
 
   if (!isOpen) return null;
@@ -145,7 +254,7 @@ export default function AiAssistantPanel({
       />
 
       {/* Slide-over Drawer */}
-      <aside className="relative w-full sm:w-[440px] md:w-[480px] bg-white h-full shadow-2xl flex flex-col z-10 border-l border-slate-200 transform transition-transform duration-300 ease-out animate-slide-in-right">
+      <aside className="relative w-full sm:w-[460px] md:w-[500px] bg-white h-full shadow-2xl flex flex-col z-10 border-l border-slate-200 transform transition-transform duration-300 ease-out animate-slide-in-right">
         {/* Drawer Header */}
         <div className="p-4 border-b border-slate-200/90 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
           <div className="flex items-center space-x-2.5">
@@ -154,12 +263,12 @@ export default function AiAssistantPanel({
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h2 className="text-sm font-bold tracking-tight">AI Weather & Hazard Assistant</h2>
+                <h2 className="text-sm font-bold tracking-tight">LANDSAFE AI Voice Assistant</h2>
                 <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wider">
-                  Beta
+                  Voice + Chat
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400">Grounded Telemetry • IMD/NDMA Aligned</p>
+              <p className="text-[11px] text-slate-400">All-India Multi-Hazard Intelligence</p>
             </div>
           </div>
 
@@ -191,61 +300,127 @@ export default function AiAssistantPanel({
               </span>
             </div>
             <span className="text-[10px] text-emerald-700 bg-emerald-100/60 px-2 py-0.5 rounded-full font-medium flex-shrink-0">
-              Active Sync
+              Active District
             </span>
+          </div>
+        )}
+
+        {/* Listening Banner */}
+        {isListening && (
+          <div className="px-4 py-2 bg-red-50 border-b border-red-200 flex items-center justify-between text-xs text-red-700 animate-pulse">
+            <div className="flex items-center space-x-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+              <span className="font-bold">Listening in English (India)... Speak your question now</span>
+            </div>
+            <button
+              onClick={toggleVoiceInput}
+              className="text-[11px] bg-red-200/60 hover:bg-red-200 px-2 py-0.5 rounded font-semibold text-red-800"
+            >
+              Stop
+            </button>
           </div>
         )}
 
         {/* Messages Feed */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/60 text-xs">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-            >
-              {/* Message Bubble */}
+          {messages.map((msg) => {
+            const isBot = msg.role === 'assistant';
+            const isSpeakingThis = speakingMsgId === msg.id;
+
+            return (
               <div
-                className={`max-w-[92%] rounded-2xl p-3.5 shadow-xs leading-relaxed ${
-                  msg.role === 'user'
-                    ? 'bg-slate-900 text-white rounded-br-xs'
-                    : 'bg-white text-slate-800 border border-slate-200/90 rounded-bl-xs'
+                key={msg.id}
+                className={`flex items-start space-x-2.5 ${
+                  msg.role === 'user' ? 'flex-row-reverse space-x-reverse' : 'flex-row'
                 }`}
               >
-                {/* Content Renderer */}
-                <FormattedMarkdown content={msg.content} />
+                {/* Avatar */}
+                <div
+                  className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-xs shadow-xs ${
+                    msg.role === 'user'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-emerald-600 text-white'
+                  }`}
+                >
+                  {msg.role === 'user' ? (
+                    <User className="w-4 h-4" />
+                  ) : (
+                    <Bot className="w-4 h-4" />
+                  )}
+                </div>
 
-                {/* Footer Metadata for Assistant */}
-                {msg.role === 'assistant' && (
-                  <div className="mt-3 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5 text-[10px] text-slate-400">
-                    <div className="flex items-center space-x-1">
-                      <Clock className="w-3 h-3 text-slate-400" />
-                      <span>{msg.timestamp_ist || 'Live IST'}</span>
-                    </div>
+                {/* Message Bubble */}
+                <div
+                  className={`max-w-[85%] rounded-2xl p-3.5 shadow-xs leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-slate-900 text-white rounded-tr-xs'
+                      : 'bg-white text-slate-800 border border-slate-200/90 rounded-tl-xs'
+                  }`}
+                >
+                  {/* Content Renderer */}
+                  <FormattedMarkdown content={msg.content} />
 
-                    {msg.sources && msg.sources.length > 0 && (
-                      <div className="flex items-center space-x-1">
-                        <Database className="w-3 h-3 text-emerald-600" />
-                        <span className="font-medium text-slate-600 truncate max-w-[180px]">
-                          {msg.sources.join(' • ')}
-                        </span>
+                  {/* Footer Metadata for Assistant with TTS button */}
+                  {isBot && (
+                    <div className="mt-3 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5 text-[10px] text-slate-400">
+                      <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-1">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span>{msg.timestamp_ist || 'Live IST'}</span>
+                        </div>
+
+                        {/* Read Aloud Button */}
+                        <button
+                          onClick={() => toggleSpeak(msg.id, msg.content)}
+                          className={`px-1.5 py-0.5 rounded flex items-center space-x-1 font-semibold transition-colors ${
+                            isSpeakingThis
+                              ? 'bg-red-50 text-red-600 border border-red-200'
+                              : 'bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700'
+                          }`}
+                          title={isSpeakingThis ? 'Stop Speaking' : 'Read Aloud (TTS)'}
+                        >
+                          {isSpeakingThis ? (
+                            <>
+                              <VolumeX className="w-3 h-3 text-red-500 animate-pulse" />
+                              <span>Stop</span>
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 className="w-3 h-3" />
+                              <span>Read Aloud</span>
+                            </>
+                          )}
+                        </button>
                       </div>
-                    )}
-                  </div>
-                )}
+
+                      {msg.sources && msg.sources.length > 0 && (
+                        <div className="flex items-center space-x-1">
+                          <Database className="w-3 h-3 text-emerald-600" />
+                          <span className="font-medium text-slate-600 truncate max-w-[150px]">
+                            {msg.sources.join(' • ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {/* Typing Indicator */}
           {isLoading && (
-            <div className="flex items-start space-x-2">
-              <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-xs px-4 py-3 shadow-xs flex items-center space-x-2 text-slate-500">
+            <div className="flex items-start space-x-2.5">
+              <div className="w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center flex-shrink-0">
+                <Bot className="w-4 h-4" />
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-xs px-4 py-3 shadow-xs flex items-center space-x-2 text-slate-500">
                 <div className="flex space-x-1">
                   <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                   <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                   <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
-                <span className="text-[11px] font-medium text-slate-600">Querying live telemetry & GSI models...</span>
+                <span className="text-[11px] font-medium text-slate-600">Analyzing live meteorological signals & GSI models...</span>
               </div>
             </div>
           )}
@@ -256,7 +431,7 @@ export default function AiAssistantPanel({
         {/* Suggested Prompts Pill Carousel */}
         <div className="px-3.5 py-2 bg-white border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-shrink-0">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex-shrink-0">
-            Ask:
+            Quick Ask:
           </span>
           {suggestedPrompts.map((p, idx) => (
             <button
@@ -270,32 +445,48 @@ export default function AiAssistantPanel({
           ))}
         </div>
 
-        {/* Input Bar */}
+        {/* Input Bar with Voice & Send */}
         <div className="p-3.5 bg-white border-t border-slate-200/90 flex-shrink-0">
-          <div className="relative flex items-center">
+          <div className="relative flex items-center gap-2">
             <textarea
               ref={inputRef}
               rows={2}
               value={inputQuery}
               onChange={(e) => setInputQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={`Ask about rainfall, hazard risk, or earthquakes in any district...`}
+              placeholder={`Ask or click mic to speak about weather, hazard risk, earthquakes...`}
               disabled={isLoading}
-              className="w-full pl-3 pr-10 py-2 bg-slate-50 hover:bg-slate-100/60 focus:bg-white text-xs text-slate-800 placeholder-slate-400 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none transition-all leading-snug"
+              className="flex-1 pl-3 pr-2 py-2 bg-slate-50 hover:bg-slate-100/60 focus:bg-white text-xs text-slate-800 placeholder-slate-400 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none transition-all leading-snug"
             />
+
+            {/* Mic Button */}
+            <button
+              onClick={toggleVoiceInput}
+              disabled={isLoading}
+              className={`p-2.5 rounded-xl border transition-all shadow-xs flex-shrink-0 ${
+                isListening
+                  ? 'bg-red-500 text-white border-red-600 animate-pulse'
+                  : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border-slate-200'
+              }`}
+              title={isListening ? 'Stop Listening' : 'Voice Input (Microphone)'}
+            >
+              {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+
+            {/* Send Button */}
             <button
               onClick={() => handleSend()}
               disabled={!inputQuery.trim() || isLoading}
-              className="absolute right-2 bottom-2 p-2 bg-slate-900 hover:bg-emerald-600 disabled:opacity-40 text-white rounded-lg transition-all shadow-xs"
+              className="p-2.5 bg-slate-900 hover:bg-emerald-600 disabled:opacity-40 text-white rounded-xl transition-all shadow-xs flex-shrink-0"
               title="Send Message (Enter)"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send className="w-4 h-4" />
             </button>
           </div>
 
           <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400 px-1">
-            <span>Press <kbd className="font-mono bg-slate-100 px-1 rounded border border-slate-200">Enter</kbd> to send</span>
-            <span className="text-amber-700/80 font-medium">IMD/NDMA/NCS are sole official warning authorities</span>
+            <span>Voice & text enabled • Press <kbd className="font-mono bg-slate-100 px-1 rounded border border-slate-200">Enter</kbd> to send</span>
+            <span className="text-amber-700/80 font-medium">Official advisories: IMD / NDMA</span>
           </div>
         </div>
       </aside>

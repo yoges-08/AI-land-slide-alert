@@ -46,11 +46,18 @@ class MosdacInsat3dSource(BaseSource):
         if simulated_payload is not None:
             return simulated_payload
 
-        # Guard: skip if no working auth token and no login credentials
-        if not self.auth_token and not (os.getenv("MOSDAC_USERNAME") and os.getenv("MOSDAC_PASSWORD")):
+        # Guard: skip if auth token is empty — prevents 3 retries × every 30 min to a 404 URL
+        if not self.auth_token:
             raise SourceFetchError(
-                "MOSDAC_AUTH_TOKEN is empty. Skipping fetch. "
-                "Login to mosdac.gov.in to obtain a bearer token."
+                "MOSDAC_AUTH_TOKEN is empty. Skipping fetch to conserve memory. "
+                "Login to mosdac.gov.in to obtain a bearer token, then set MOSDAC_AUTH_TOKEN."
+            )
+
+        # Guard: skip if using the placeholder URL (returns 404 always)
+        if "mosdac.gov.in/api/v1/qpe" in self.api_endpoint or "mosdac.gov.in/catalog" in self.api_endpoint:
+            raise SourceFetchError(
+                "MOSDAC API endpoint is a placeholder URL (returns HTTP 404). "
+                "Update MOSDAC_API_ENDPOINT env var to the real MOSDAC data access URL."
             )
 
         # Live network fetch

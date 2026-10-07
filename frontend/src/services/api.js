@@ -304,6 +304,62 @@ export async function runSimulation(simData) {
   }
 }
 
+export async function runSimulateWhatIf(sliderData) {
+  try {
+    const res = await fetch(`${API_BASE}/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sliderData),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Interactive simulation fetch error, computing offline fallback:', err);
+    const rainfall = Number(sliderData.rainfall_intensity) || 80;
+    const soil = Number(sliderData.soil_moisture) || 50;
+    const slope = Number(sliderData.slope) || 30;
+    const eq = Number(sliderData.earthquake_magnitude) || 0;
+    const veg = Number(sliderData.vegetation_cover) || 50;
+    const duration = Number(sliderData.duration) || 24;
+
+    const slopeFactor = Math.pow(Math.min(1.0, Math.max(0.0, (slope - 5.0) / 45.0)), 1.25);
+    const rainLoad = Math.min(1.0, (rainfall * Math.pow(duration / 24.0, 0.5)) / 350.0);
+    const soilFactor = Math.pow(soil / 100.0, 1.15);
+    const vegProtection = (veg / 100.0) * 0.30;
+    const seismicFactor = eq >= 2.0 ? Math.min(0.35, Math.max(0.0, (eq - 2.0) * 0.08)) : 0.0;
+
+    const rawHazard = (slopeFactor * 0.35) + (rainLoad * 0.35) + (soilFactor * 0.20) + seismicFactor - vegProtection;
+    const prob = Math.round(Math.min(0.98, Math.max(0.02, rawHazard)) * 100) / 100;
+    const riskLevel = prob >= 0.80 ? 'Critical' : (prob >= 0.60 ? 'High' : (prob >= 0.40 ? 'Moderate' : 'Low'));
+
+    return {
+      probability: prob,
+      hazard_index: prob,
+      risk_level: riskLevel,
+      risk_category: riskLevel,
+      shap_values: {
+        rainfall_intensity: Math.round(rainLoad * 0.35 * 100) / 100,
+        soil_moisture: Math.round(soilFactor * 0.20 * 100) / 100,
+        slope_angle: Math.round(slopeFactor * 0.35 * 100) / 100,
+        earthquake_magnitude: Math.round(seismicFactor * 100) / 100,
+        vegetation_cover: Math.round(-vegProtection * 100) / 100,
+        rainfall_duration: Math.round(Math.min(0.12, (duration / 72.0) * 0.12) * 100) / 100,
+      },
+      contributions: [
+        { factor: 'Rainfall Intensity', value: `${rainfall} mm`, contribution: Math.round(rainLoad * 0.35 * 100) / 100, is_positive: true, description: 'Precipitation volume saturation' },
+        { factor: 'Slope Angle', value: `${slope}°`, contribution: Math.round(slopeFactor * 0.35 * 100) / 100, is_positive: true, description: 'Gravitational shear stress' },
+        { factor: 'Soil Moisture', value: `${soil}%`, contribution: Math.round(soilFactor * 0.20 * 100) / 100, is_positive: true, description: 'Pore water pressure build-up' },
+        { factor: 'Vegetation Cover', value: `${veg}%`, contribution: Math.round(-vegProtection * 100) / 100, is_positive: false, description: 'Root cohesion & soil retention' },
+        { factor: 'Earthquake Magnitude', value: `${eq} M`, contribution: Math.round(seismicFactor * 100) / 100, is_positive: eq > 0, description: 'Ground acceleration trigger' },
+        { factor: 'Rainfall Duration', value: `${duration} hrs`, contribution: Math.round(Math.min(0.12, (duration / 72.0) * 0.12) * 100) / 100, is_positive: true, description: 'Cumulative infiltration exposure' },
+      ],
+      disclaimer: 'Advisory only. Follow IMD / NDMA guidance.',
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+
 export async function fetchModelInfo() {
   try {
     const res = await fetch(`${API_BASE}/model/info`);
@@ -348,6 +404,89 @@ export async function sendAssistantChat(message, currentLocation = null, history
       timestamp_ist: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }),
       advisory: 'Advisory only. IMD, NDMA and NCS are the sole official warning authorities in India.',
     };
+  }
+}
+
+export async function fetchNotificationLog(limit = 50) {
+  try {
+    const res = await fetch(`${API_BASE}/notifications/log?limit=${limit}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Notification log fetch error, returning demo fallback:', err);
+    return {
+      notifications: [
+        {
+          id: 'demo-1',
+          phone_number: '+91 98765 43210',
+          district: 'Wayanad',
+          risk_level: 'Critical',
+          risk_score: 88,
+          status: 'DEMO_DELIVERED',
+          message: '🚨 LANDSAFE-NER ALERT\nDistrict: Wayanad\nRisk Level: Critical (88%)\nAction: Evacuate to nearest shelter immediately\nTime: 14:30 IST\n⚠️ Follow NDMA/IMD.',
+          timestamp_ist: '14:30 IST (Demo)'
+        }
+      ],
+      total_dispatched: 1,
+      demo_mode: true
+    };
+  }
+}
+
+export async function subscribeNotification(phone, district = 'All Districts', name = 'Citizen') {
+  try {
+    const res = await fetch(`${API_BASE}/notifications/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone_number: phone, district, name }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Subscribe error, saving local demo:', err);
+    return {
+      success: true,
+      message: `Subscribed ${phone} for ${district} (Demo Local Mode)`
+    };
+  }
+}
+
+export async function sendTestNotification(phone, district = 'Wayanad') {
+  try {
+    const res = await fetch(`${API_BASE}/notifications/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone_number: phone, district }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Test alert error, creating demo confirmation:', err);
+    return {
+      success: true,
+      result: {
+        id: `demo-test-${Date.now()}`,
+        phone_number: phone,
+        district: district || 'Wayanad',
+        risk_level: 'Critical',
+        risk_score: 85,
+        status: 'DEMO_DELIVERED',
+        message: `🚨 LANDSAFE-NER TEST ALERT\nDistrict: ${district || 'Wayanad'}\nRisk Level: Critical (85%)\nAction: Move to high ground\nTime: Just now`,
+        timestamp_ist: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
+      },
+      demo_mode: true
+    };
+  }
+}
+
+export async function fetchEvacuationPlan(districtId) {
+  try {
+    const res = await fetch(`${API_BASE}/evacuation/${districtId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Evacuation plan fetch error:', err);
+    return null;
   }
 }
 

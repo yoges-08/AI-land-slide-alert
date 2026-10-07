@@ -50,6 +50,14 @@ class NasaGpmSource(BaseSource):
                 "Configure EARTHDATA_TOKEN in environment to enable."
             )
 
+        # Guard: skip if using the placeholder URL (returns 404 always)
+        if "gpm.nasa.gov/api/v1/imerg" in self.api_endpoint:
+            raise SourceFetchError(
+                "NASA GPM API endpoint is a placeholder URL (returns HTTP 404). "
+                "Update NASA_GPM_API_ENDPOINT to the real GES DISC CMR endpoint: "
+                "https://cmr.earthdata.nasa.gov/search/granules.json"
+            )
+
         headers = {
             "Accept": "application/json",
             "User-Agent": "LANDSAFE-NER/1.0 (Academic-Disaster-Watch)",

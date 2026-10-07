@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-1.5-flash")
     LLM_TEMPERATURE: float = 0.2
 
+    # SMS/WhatsApp Alert System Configuration
+    TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
+    NOTIFICATION_DEMO_MODE: bool = os.getenv("NOTIFICATION_DEMO_MODE", "true").lower() in ("true", "1", "yes")
+
     PROTOTYPE_DISCLAIMER: str = ADVISORY_NOTICE
 
     model_config = {
