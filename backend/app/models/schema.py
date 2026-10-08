@@ -179,6 +179,7 @@ class SatelliteInfoResponse(BaseModel):
     farm_change_flag: Optional[bool] = None
     flood_extent_flag: Optional[bool] = None
     fire_detected: Optional[bool] = None
+    bhoonidhi_scene: Optional[Dict[str, Any]] = None
     source: str
     last_updated: Optional[str] = None
     disclaimer: str

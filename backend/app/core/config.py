@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
     NOTIFICATION_DEMO_MODE: bool = os.getenv("NOTIFICATION_DEMO_MODE", "true").lower() in ("true", "1", "yes")
 
+    # ISRO NRSC Bhoonidhi Satellite API Configuration
+    BHOONIDHI_USER_ID: str = os.getenv("BHOONIDHI_USER_ID", "")
+    BHOONIDHI_PASSWORD: str = os.getenv("BHOONIDHI_PASSWORD", "")
+
     PROTOTYPE_DISCLAIMER: str = ADVISORY_NOTICE
 
     model_config = {

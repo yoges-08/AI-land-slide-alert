@@ -359,8 +359,97 @@ async def _fetch_nasa_firms_fire(lat: float, lon: float) -> Optional[bool]:
     return None
 
 
+# Bhoonidhi Auth Token Cache
+_BHOONIDHI_TOKEN: Optional[str] = None
+_BHOONIDHI_TOKEN_EXPIRY: float = 0.0
+
+
+async def _fetch_bhoonidhi_token() -> Optional[str]:
+    """Obtain or refresh JWT access token for ISRO NRSC Bhoonidhi OpenSearch/STAC API."""
+    global _BHOONIDHI_TOKEN, _BHOONIDHI_TOKEN_EXPIRY
+    if not settings.BHOONIDHI_USER_ID or not settings.BHOONIDHI_PASSWORD:
+        return None
+
+    now = time.time()
+    if _BHOONIDHI_TOKEN and now < _BHOONIDHI_TOKEN_EXPIRY:
+        return _BHOONIDHI_TOKEN
+
+    try:
+        client = await _get_sat_http_client()
+        resp = await client.post(
+            "https://bhoonidhi-api.nrsc.gov.in/auth/token",
+            json={
+                "userId": settings.BHOONIDHI_USER_ID,
+                "password": settings.BHOONIDHI_PASSWORD,
+                "grant_type": "password",
+            },
+            headers={"Content-Type": "application/json"}
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            token = data.get("access_token") or data.get("token")
+            expires_in = data.get("expires_in", 3600)
+            if token:
+                _BHOONIDHI_TOKEN = token
+                _BHOONIDHI_TOKEN_EXPIRY = now + float(expires_in) - 60.0
+                return token
+        logger.debug("Bhoonidhi token endpoint returned HTTP %d", resp.status_code)
+    except Exception as exc:
+        logger.debug("Bhoonidhi token request failed: %s", exc)
+    return None
+
+
+async def _fetch_bhoonidhi_scenes(lat: float, lon: float) -> Optional[Dict[str, Any]]:
+    """Query ISRO Bhoonidhi STAC API for recent EO satellite scenes (Resourcesat, Cartosat, NISAR)."""
+    token = await _fetch_bhoonidhi_token()
+    if not token:
+        return None
+
+    try:
+        client = await _get_sat_http_client()
+        bbox_delta = 0.08
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=30)
+
+        search_payload = {
+            "bbox": [lon - bbox_delta, lat - bbox_delta, lon + bbox_delta, lat + bbox_delta],
+            "datetime": f"{start_date.strftime('%Y-%m-%d')}T00:00:00Z/{end_date.strftime('%Y-%m-%d')}T23:59:59Z",
+            "limit": 5,
+        }
+
+        resp = await client.post(
+            "https://bhoonidhi-api.nrsc.gov.in/stac/search",
+            json=search_payload,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            return None
+
+        result = resp.json()
+        features = result.get("features", [])
+        if not features:
+            return None
+
+        latest_feature = features[0]
+        props = latest_feature.get("properties", {})
+        assets = latest_feature.get("assets", {})
+
+        return {
+            "satellite": props.get("platform") or props.get("satellite", "Resourcesat/Cartosat"),
+            "sensor": props.get("instruments", ["LISS-4"])[0] if isinstance(props.get("instruments"), list) else props.get("sensor", "LISS-4"),
+            "acquisition_date": props.get("datetime") or props.get("acquisition_date"),
+            "cloud_cover_pct": props.get("eo:cloud_cover") or props.get("cloud_cover"),
+            "scene_id": latest_feature.get("id", "Unknown"),
+            "preview_url": assets.get("thumbnail", {}).get("href") or assets.get("preview", {}).get("href"),
+            "source": "ISRO / NRSC Bhoonidhi Open Data",
+        }
+    except Exception as exc:
+        logger.debug("Bhoonidhi scenes query failed: %s", exc)
+        return None
+
+
 async def get_satellite_observation(location: dict) -> Dict[str, Any]:
-    """Return real satellite observations from Copernicus/NASA, or NO DATA."""
+    """Return real satellite observations from Copernicus/NASA/ISRO Bhoonidhi, or NO DATA."""
     if is_demo():
         from backend.demo.fake_satellite import compute_satellite_indices
         return compute_satellite_indices(
@@ -381,10 +470,11 @@ async def get_satellite_observation(location: dict) -> Dict[str, Any]:
             return cached_val
 
     # Query live satellite providers concurrently
-    sentinel2, sentinel1, fire = await asyncio.gather(
+    sentinel2, sentinel1, fire, bhoonidhi = await asyncio.gather(
         _fetch_sentinel2_indices(lat, lon),
         _fetch_sentinel1_sar(lat, lon),
         _fetch_nasa_firms_fire(lat, lon),
+        _fetch_bhoonidhi_scenes(lat, lon),
         return_exceptions=True,
     )
 
@@ -394,9 +484,13 @@ async def get_satellite_observation(location: dict) -> Dict[str, Any]:
         sentinel1 = None
     if isinstance(fire, Exception):
         fire = None
+    if isinstance(bhoonidhi, Exception):
+        bhoonidhi = None
 
-    if sentinel2 or sentinel1 or fire is not None:
+    if sentinel2 or sentinel1 or fire is not None or bhoonidhi:
         source_parts = []
+        if bhoonidhi:
+            source_parts.append(f"ISRO Bhoonidhi ({bhoonidhi.get('satellite', 'EO')})")
         if sentinel2:
             source_parts.append("Sentinel-2 L2A")
         if sentinel1:
@@ -404,14 +498,18 @@ async def get_satellite_observation(location: dict) -> Dict[str, Any]:
         if fire is not None:
             source_parts.append("NASA FIRMS")
 
+        primary_source = "ISRO Bhoonidhi + Copernicus" if bhoonidhi else (
+            f"Copernicus {(' + '.join(source_parts)) if source_parts else 'Sentinel'}"
+        )
+
         result = {
             "data_status": {
-                "status": "FRESH" if (sentinel2 or sentinel1) else "RECENT",
-                "source": "copernicus_sentinel" if (sentinel2 or sentinel1) else "nasa_firms",
-                "observed_at": (sentinel2 or sentinel1 or {}).get("observed_at") or utcnow().isoformat(),
+                "status": "FRESH" if (bhoonidhi or sentinel2 or sentinel1) else "RECENT",
+                "source": "isro_bhoonidhi" if bhoonidhi else ("copernicus_sentinel" if (sentinel2 or sentinel1) else "nasa_firms"),
+                "observed_at": (bhoonidhi or {}).get("acquisition_date") or (sentinel2 or sentinel1 or {}).get("observed_at") or utcnow().isoformat(),
             },
-            "status": "FRESH" if (sentinel2 or sentinel1) else "RECENT",
-            "source": f"Copernicus {(' + '.join(source_parts)) if source_parts else 'Sentinel'}",
+            "status": "FRESH" if (bhoonidhi or sentinel2 or sentinel1) else "RECENT",
+            "source": primary_source,
             "snow_cover_pct": (sentinel1 or {}).get("snow_cover_pct"),
             "snowmelt_rate": (sentinel1 or {}).get("snowmelt_rate"),
             "bare_soil_pct": (sentinel2 or {}).get("bare_soil_pct"),
@@ -419,7 +517,8 @@ async def get_satellite_observation(location: dict) -> Dict[str, Any]:
             "farm_change_flag": None,
             "flood_extent_flag": (sentinel1 or {}).get("flood_extent_flag"),
             "fire_detected": fire,
-            "last_updated": (sentinel2 or sentinel1 or {}).get("observed_at") or utcnow().isoformat(),
+            "bhoonidhi_scene": bhoonidhi,
+            "last_updated": (bhoonidhi or {}).get("acquisition_date") or (sentinel2 or sentinel1 or {}).get("observed_at") or utcnow().isoformat(),
             "pending_sources": PENDING_INDEX_LAYERS,
         }
         _SAT_CACHE[cache_key] = (now_ts, result)
@@ -428,18 +527,20 @@ async def get_satellite_observation(location: dict) -> Dict[str, Any]:
     status = no_data(
         "nisar_ssar",
         reason=_PENDING_REASON,
-        pending="M4 ingestion: FIRMS -> INSAT-3D/3DR -> NISAR -> Resourcesat",
+        pending="M4 ingestion: Bhoonidhi -> FIRMS -> INSAT-3D/3DR -> NISAR -> Resourcesat",
     )
     result = {
         "data_status": status,
         "status": "NO_DATA",
-        "source": "pending — NISAR / Sentinel-1 / Resourcesat / Sentinel-2 (M4)",
+        "source": "pending — ISRO Bhoonidhi / NISAR / Sentinel-1 / Resourcesat / Sentinel-2 (M4)",
         "snow_cover_pct": None,
         "snowmelt_rate": None,
         "bare_soil_pct": None,
         "vegetation_index": None,
         "farm_change_flag": None,
         "flood_extent_flag": None,
+        "fire_detected": None,
+        "bhoonidhi_scene": None,
         "last_updated": None,
         "pending_sources": PENDING_INDEX_LAYERS,
     }

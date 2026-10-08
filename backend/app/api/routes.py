@@ -408,6 +408,8 @@ async def get_satellite_info(loc_id: int):
         vegetation_index=sat.get("vegetation_index"),
         farm_change_flag=sat.get("farm_change_flag"),
         flood_extent_flag=sat.get("flood_extent_flag"),
+        fire_detected=sat.get("fire_detected"),
+        bhoonidhi_scene=sat.get("bhoonidhi_scene"),
         source=sat.get("source"),
         last_updated=sat.get("last_updated"),
         disclaimer=ADVISORY_NOTICE,
