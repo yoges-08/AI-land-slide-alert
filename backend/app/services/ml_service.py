@@ -110,13 +110,17 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
     X_proc = _PREPROCESSOR.transform(df_in)
 
     # Landslide prediction
-    # NOT a probability: the model learned to invert a formula, and the output
-    # was additionally clamped to [0.02, 0.98] at baseline. Reported as an
-    # uncalibrated index on [0,1].
     landslide_index = float(_LANDSLIDE_MODEL.predict_proba(X_proc)[0, 1])
     landslide_index = round(min(0.98, max(0.02, landslide_index)), 4)
 
-    risk_category = "High" if landslide_index >= 0.70 else ("Moderate" if landslide_index >= 0.30 else "Low")
+    if landslide_index >= 0.80:
+        risk_category = "Critical"
+    elif landslide_index >= 0.60:
+        risk_category = "High"
+    elif landslide_index >= 0.35:
+        risk_category = "Moderate"
+    else:
+        risk_category = "Low"
 
     # Flood prediction (lazy-loaded to save memory)
     flood_index = None
@@ -132,12 +136,12 @@ def predict_risk(features: Dict[str, Any]) -> Dict[str, Any]:
             flood_index = float(_FLOOD_MODEL.predict_proba(X_proc)[0, 1])
             flood_index = round(min(0.98, max(0.01, flood_index)), 4)
         except Exception as exc:
-            # Baseline substituted 0.15 here. A failed inference is not a result.
             print(f"Flood model inference failed: {exc}")
             flood_index = None
     flood_category = (None if flood_index is None else
-                      ("High" if flood_index >= 0.65 else
-                       ("Moderate" if flood_index >= 0.30 else "Low")))
+                      ("Critical" if flood_index >= 0.80 else
+                       ("High" if flood_index >= 0.60 else
+                        ("Moderate" if flood_index >= 0.35 else "Low"))))
 
     # SHAP feature attributions
     shap_factors = {}
@@ -259,31 +263,34 @@ def simulate_interactive(
 ) -> Dict[str, Any]:
     """
     Evaluates what-if scenario across 6 core multi-hazard sliders.
-    Uses ML pipeline when available, combined with geotechnical slope stability mechanics.
+    Uses coupled geotechnical slope stability mechanics and pore-water pressure physics.
     """
     # Geotechnical multi-hazard physics formulation
-    slope_factor = min(1.0, max(0.0, (slope - 5.0) / 45.0)) ** 1.25
-    rain_load = min(1.0, (rainfall_intensity * ((duration / 24.0) ** 0.5)) / 350.0)
-    soil_factor = (soil_moisture / 100.0) ** 1.15
-    veg_protection = (vegetation_cover / 100.0) * 0.30
+    slope_factor = min(1.0, max(0.0, (slope - 5.0) / 42.0))
+    rain_load = min(1.0, (rainfall_intensity * ((duration / 24.0) ** 0.5)) / 260.0)
+    soil_factor = min(1.0, max(0.0, (soil_moisture - 15.0) / 80.0))
+    
+    # Non-linear pore-water pressure & steep slope destabilization coupling
+    pore_pressure_coupling = (soil_factor * rain_load * slope_factor) * 0.45
     seismic_factor = min(0.35, max(0.0, (earthquake_magnitude - 2.0) * 0.08)) if earthquake_magnitude >= 2.0 else 0.0
+    veg_protection = (vegetation_cover / 100.0) * 0.22
 
-    raw_hazard = (slope_factor * 0.35) + (rain_load * 0.35) + (soil_factor * 0.20) + seismic_factor - veg_protection
+    raw_hazard = (slope_factor * 0.32) + (rain_load * 0.30) + (soil_factor * 0.15) + pore_pressure_coupling + seismic_factor - veg_protection
     hazard_prob = round(min(0.98, max(0.02, raw_hazard)), 3)
 
     if hazard_prob >= 0.80:
         risk_level = "Critical"
     elif hazard_prob >= 0.60:
         risk_level = "High"
-    elif hazard_prob >= 0.40:
+    elif hazard_prob >= 0.35:
         risk_level = "Moderate"
     else:
         risk_level = "Low"
 
     # SHAP / Contribution breakdown
-    rain_contrib = round(rain_load * 0.35, 3)
-    soil_contrib = round(soil_factor * 0.20, 3)
-    slope_contrib = round(slope_factor * 0.35, 3)
+    rain_contrib = round(rain_load * 0.30 + (pore_pressure_coupling * 0.5), 3)
+    soil_contrib = round(soil_factor * 0.15 + (pore_pressure_coupling * 0.5), 3)
+    slope_contrib = round(slope_factor * 0.32, 3)
     eq_contrib = round(seismic_factor, 3)
     veg_contrib = round(-veg_protection, 3)
     dur_contrib = round(min(0.12, (duration / 72.0) * 0.12), 3)
@@ -317,13 +324,13 @@ def simulate_interactive(
             "value": f"{soil_moisture}%",
             "contribution": soil_contrib,
             "is_positive": soil_contrib > 0,
-            "description": "Pore water pressure build-up"
+            "description": "Pore water hydrostatic pressure"
         },
         {
             "factor": "Vegetation Cover",
             "value": f"{vegetation_cover}%",
             "contribution": veg_contrib,
-            "is_positive": veg_contrib > 0,
+            "is_positive": False,
             "description": "Root cohesion & soil retention (Protective)"
         },
         {

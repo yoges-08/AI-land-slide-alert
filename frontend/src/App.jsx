@@ -116,7 +116,9 @@ export default function App() {
             const lsi = Math.round(((slopeScore * 0.70) + (elevScore * 0.30)) * 100) / 100;
 
             hazIdx = Math.min(0.92, Math.max(0.08, lsi));
-            if (hazIdx >= 0.60) {
+            if (hazIdx >= 0.80) {
+              riskCat = 'Critical';
+            } else if (hazIdx >= 0.60) {
               riskCat = 'High';
             } else if (hazIdx >= 0.35) {
               riskCat = 'Moderate';
@@ -241,7 +243,7 @@ export default function App() {
   });
 
   // Counts for top cards
-  const highCount = (locations || []).filter((l) => (l?.risk_category || '') === 'High').length;
+  const highCount = (locations || []).filter((l) => (l?.risk_category || '') === 'High' || (l?.risk_category || '') === 'Critical').length;
   const modCount = (locations || []).filter((l) => (l?.risk_category || '') === 'Moderate').length;
   const lowCount = (locations || []).filter((l) => (l?.risk_category || '').includes('Low') || (l?.risk_category || '').includes('Plain')).length;
 

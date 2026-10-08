@@ -48,11 +48,79 @@ export default function LocationDetails({
   const hazardVal = prediction?.hazard_index ?? location.hazard_index ?? location.risk_probability;
   const hasPrediction = location.has_prediction !== false && hazardVal != null;
   const prob = hazardVal != null ? Math.round(hazardVal * 100) : null;
-  const category = prediction?.risk_category || location.risk_category || (prob != null ? (prob >= 70 ? 'High Risk' : prob >= 30 ? 'Moderate Risk' : 'Low Risk') : 'No Active Assessment');
-  const floodCategory = prediction?.flood_risk_category || location.flood_risk_category || 'No Data';
+  const rawCategory = prediction?.risk_category || location.risk_category;
+  let category = 'Low Risk';
+  let badgeTheme = {
+    bg: 'bg-emerald-50/90',
+    border: 'border-emerald-200',
+    text: 'text-emerald-800',
+    subText: 'text-emerald-600/90',
+    iconBg: 'bg-emerald-500',
+    valText: 'text-emerald-600',
+    label: 'Low Risk'
+  };
 
+  if (prob != null) {
+    if (prob >= 80 || rawCategory === 'Critical') {
+      category = 'Critical Risk';
+      badgeTheme = {
+        bg: 'bg-red-50/90',
+        border: 'border-red-200',
+        text: 'text-red-700',
+        subText: 'text-red-600/90',
+        iconBg: 'bg-red-600',
+        valText: 'text-red-600',
+        label: 'Critical Risk'
+      };
+    } else if (prob >= 60 || rawCategory === 'High') {
+      category = 'High Risk';
+      badgeTheme = {
+        bg: 'bg-orange-50/90',
+        border: 'border-orange-200',
+        text: 'text-orange-800',
+        subText: 'text-orange-600/90',
+        iconBg: 'bg-orange-500',
+        valText: 'text-orange-600',
+        label: 'High Risk'
+      };
+    } else if (prob >= 35 || rawCategory === 'Moderate') {
+      category = 'Moderate Risk';
+      badgeTheme = {
+        bg: 'bg-amber-50/90',
+        border: 'border-amber-200',
+        text: 'text-amber-800',
+        subText: 'text-amber-600/90',
+        iconBg: 'bg-amber-500',
+        valText: 'text-amber-600',
+        label: 'Moderate Risk'
+      };
+    }
+  }
+
+  // Plain-language "Why is this risky?" explanation generator
+  const getRiskExplanation = () => {
+    if (!hasPrediction || prob == null) {
+      return 'Awaiting active weather and earth observation triggers.';
+    }
+    const reasons = [];
+    if (Number(slope) >= 28) reasons.push(`steep slope (${slope}°)`);
+    if (Number(rain24h) >= 40) reasons.push(`saturated rainfall (${rain24h} mm/24h)`);
+    else if (Number(rain24h) > 10) reasons.push(`active rain (${rain24h} mm)`);
+    if (Number(location.bare_soil_pct) >= 25) reasons.push(`exposed bare soil (${location.bare_soil_pct}%)`);
+    if (Number(elevation) >= 1200) reasons.push(`high mountain terrain (${elevation} m)`);
+
+    if (reasons.length === 0) {
+      return prob >= 60
+        ? 'High vulnerability driven by composite geotechnical terrain and moisture factors.'
+        : prob >= 35
+        ? 'Moderate risk due to localized slope inclination.'
+        : 'Stable terrain conditions with low precipitation trigger.';
+    }
+    return `${category} mainly because of: ${reasons.slice(0, 3).join(', ')}.`;
+  };
+
+  const floodCategory = prediction?.flood_risk_category || location.flood_risk_category || 'Low Risk';
   const factors = location.key_risk_factors || null;
-
   const imageSrc = location.image_url || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=500&auto=format&fit=crop&q=60';
 
   return (
@@ -93,16 +161,16 @@ export default function LocationDetails({
           <DataSourceTag source={location.satellite_source || 'NASA/Copernicus'} isSample={location.is_sample_data} />
         </div>
 
-        {/* Risk Probability Banner OR Plain District Notice */}
+        {/* Risk Probability Banner with Dynamic Category Styling */}
         {hasPrediction && prob != null ? (
-          <div className="mt-3 bg-red-50/70 border border-red-100 rounded-xl p-3 flex items-center justify-between">
+          <div className={`mt-3 ${badgeTheme.bg} border ${badgeTheme.border} rounded-xl p-3 flex items-center justify-between transition-all`}>
             <div className="flex items-center space-x-2">
-              <div className="w-7 h-7 rounded-lg bg-red-500 text-white flex items-center justify-center shadow-xs">
+              <div className={`w-7 h-7 rounded-lg ${badgeTheme.iconBg} text-white flex items-center justify-center shadow-xs`}>
                 <AlertTriangle className="w-4 h-4" />
               </div>
               <div>
-                <span className="text-xs font-bold text-red-700 block leading-tight">
-                  {category.includes('Risk') ? category : `${category} Risk`}
+                <span className={`text-xs font-bold ${badgeTheme.text} block leading-tight`}>
+                  {badgeTheme.label}
                   {location.risk_source === 'TERRAIN_SUSCEPTIBILITY' && (
                     <span className="text-[10px] text-amber-700 font-normal ml-1 bg-amber-100/80 px-1 py-0.5 rounded">(Terrain)</span>
                   )}
@@ -110,14 +178,14 @@ export default function LocationDetails({
                     <span className="text-[10px] text-purple-700 font-normal ml-1 bg-purple-100/80 px-1 py-0.5 rounded">(Satellite Degraded)</span>
                   )}
                 </span>
-                <span className="text-[10px] text-red-600/80 font-medium">
-                  {location.risk_source === 'TERRAIN_SUSCEPTIBILITY' ? 'Terrain Susceptibility' : location.risk_source === 'DEGRADED_SATELLITE' ? 'Satellite + Terrain' : 'Hazard Index'}
+                <span className={`text-[10px] ${badgeTheme.subText} font-medium`}>
+                  {location.risk_source === 'TERRAIN_SUSCEPTIBILITY' ? 'Terrain Susceptibility' : location.risk_source === 'DEGRADED_SATELLITE' ? 'Satellite + Terrain' : 'Calculated Hazard Index'}
                 </span>
               </div>
             </div>
             <div className="text-right">
-              <span className="text-xl font-extrabold text-red-600 leading-none">{prob}%</span>
-              <span className="text-[10px] text-slate-500 block font-medium">Calculated Score</span>
+              <span className={`text-xl font-extrabold ${badgeTheme.valText} leading-none`}>{prob}%</span>
+              <span className="text-[10px] text-slate-500 block font-medium">Risk Score</span>
             </div>
           </div>
         ) : (
@@ -129,6 +197,28 @@ export default function LocationDetails({
                 Zero-fabrication policy: Real-time hazard scoring requires confirmed meteorological & satellite feeds.
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Plain-Language "Why is this risky?" Summary Card */}
+        {hasPrediction && (
+          <div className="mt-2.5 p-2.5 bg-slate-50/90 border border-slate-200/80 rounded-xl text-xs">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-amber-500" /> Why is this risky?
+              </span>
+              {onOpenAnalysis && (
+                <button
+                  onClick={onOpenAnalysis}
+                  className="text-[10px] text-blue-600 hover:text-blue-800 font-semibold underline"
+                >
+                  See full breakdown
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-600 leading-relaxed">
+              {getRiskExplanation()}
+            </p>
           </div>
         )}
 

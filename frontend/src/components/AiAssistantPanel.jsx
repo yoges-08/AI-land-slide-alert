@@ -85,11 +85,17 @@ export default function AiAssistantPanel({
       return;
     }
 
+    // Cancel any active TTS speech before listening to the user
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      setSpeakingMsgId(null);
+    }
+
     try {
       const recognition = new SpeechRecognition();
       recognition.lang = 'en-IN';
       recognition.continuous = false;
-      recognition.interimResults = false;
+      recognition.interimResults = true;
       recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
@@ -97,10 +103,25 @@ export default function AiAssistantPanel({
       };
 
       recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript) {
-          setInputQuery(transcript);
-          handleSend(transcript);
+        let interimText = '';
+        let finalText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalText += event.results[i][0].transcript;
+          } else {
+            interimText += event.results[i][0].transcript;
+          }
+        }
+
+        if (interimText) {
+          setInputQuery(interimText);
+        }
+
+        if (finalText) {
+          const cleanFinal = finalText.trim();
+          setInputQuery(cleanFinal);
+          handleSend(cleanFinal);
         }
       };
 
@@ -121,7 +142,7 @@ export default function AiAssistantPanel({
     }
   };
 
-  // Text to Speech (TTS) - SpeechSynthesis
+  // Text to Speech (TTS) - SpeechSynthesis with natural voice selection
   const toggleSpeak = (msgId, text) => {
     if (!window.speechSynthesis) {
       alert('Speech Synthesis is not supported in this browser.');
@@ -136,17 +157,32 @@ export default function AiAssistantPanel({
 
     window.speechSynthesis.cancel();
 
-    // Clean markdown for spoken narration
+    // Clean markdown, links, LaTeX, and technical tags for natural spoken narration
     const cleanSpeechText = text
-      .replace(/[#*`_~>\[\]]/g, '')
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1') // [link text](url) -> link text
+      .replace(/https?:\/\/\S+/g, '') // remove raw URLs
+      .replace(/\$[^$]+\$/g, '') // remove math syntax
+      .replace(/[#*`_~>\[\]]/g, '') // remove markdown symbols
       .replace(/\|/g, ', ')
       .replace(/\s+/g, ' ')
       .trim();
 
+    if (!cleanSpeechText) return;
+
     const utterance = new SpeechSynthesisUtterance(cleanSpeechText);
     utterance.lang = 'en-IN';
-    utterance.rate = 1.0;
+    utterance.rate = 1.05;
     utterance.pitch = 1.0;
+
+    // Pick natural voice if available in browser
+    const voices = window.speechSynthesis.getVoices();
+    const preferredVoice = voices.find(
+      (v) => (v.lang === 'en-IN' || v.name.includes('India') || v.name.includes('Google') || v.name.includes('Natural')) && v.lang.startsWith('en')
+    ) || voices.find((v) => v.lang.startsWith('en'));
+
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+    }
 
     utterance.onend = () => setSpeakingMsgId(null);
     utterance.onerror = () => setSpeakingMsgId(null);

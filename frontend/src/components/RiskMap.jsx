@@ -126,8 +126,8 @@ export default function RiskMap({
     const prob = loc.hazard_index ?? loc.risk_probability;
     if (loc.risk_category === 'Critical' || (prob != null && prob >= 0.80)) return '#ef4444';
     if (loc.risk_category === 'High' || (prob != null && prob >= 0.60)) return '#f97316';
-    if (loc.risk_category === 'Moderate' || (prob != null && prob >= 0.40)) return '#eab308';
-    if (loc.risk_category === 'Low' || (prob != null && prob < 0.40)) return '#10b981';
+    if (loc.risk_category === 'Moderate' || (prob != null && prob >= 0.35)) return '#eab308';
+    if (loc.risk_category === 'Low' || (prob != null && prob < 0.35)) return '#10b981';
     return '#64748b'; // Neutral slate
   };
 
